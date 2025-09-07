@@ -32,6 +32,5 @@ class WhisperWrappedEncoder:
     
 
         encoder = WhisperModel.from_pretrained(model_config.encoder_model,torch_dtype=torch.bfloat16).encoder
-        encoder.extract_variable_length_features = types.MethodType(extract_variable_length_features, encoder)
         
         return encoder
