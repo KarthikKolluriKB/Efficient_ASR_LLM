@@ -307,5 +307,4 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
 
 def get_speech_dataset(dataset_config, tokenizer, split):
     dataset = SpeechDatasetJsonl(dataset_config, tokenizer, split)
-
     return dataset
