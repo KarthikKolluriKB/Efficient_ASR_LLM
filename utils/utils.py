@@ -13,10 +13,10 @@ def set_seed(seed: int):
     # torch.backends.cudnn.benchmark = False
 
 
-# TODO: Need to check if this works correctly (single GPU case)
+# TODO: Need to check if this works correctly (single GPU case) (cuda vs cuda:0)
 def get_device() -> str:
     """Get the available device (GPU0 or CPU)."""
-    return "cuda:0" if torch.cuda.is_available() else "cpu"
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 # TODO: need to understand this function
 def resolve_pad_token(tokenizer, model) -> int:
