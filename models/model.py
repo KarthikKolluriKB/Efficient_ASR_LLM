@@ -20,7 +20,7 @@ from utils.train_utils import print_model_size, print_module_size
 logger = logging.getLogger(__name__)
 
 
-def model_factory(train_config, model_config, **kwargs):
+def model_builder(train_config, model_config, **kwargs):
     """"""
     # 1. tokenizer
     tokenizer = setup_tokenizer(train_config, model_config, **kwargs)
@@ -61,7 +61,7 @@ def model_factory(train_config, model_config, **kwargs):
 def setup_tokenizer(train_config, model_config, **kwargs):
     # Load the tokenizer and special tokens
     tokenizer = AutoTokenizer.from_pretrained(
-        model_config.llm_path
+        model_config.llm_model
     )
     tokenizer.pad_token_id = tokenizer.eos_token_id
     return tokenizer
@@ -70,7 +70,7 @@ def setup_tokenizer(train_config, model_config, **kwargs):
 def setup_encoder(train_config, model_config, **kwargs):
     
     # whisper encoder
-    encoder_name = model_config.encoder_name
+    encoder_name = model_config.encoder_model_name
     
     encoder = WhisperWrappedEncoder.load(model_config)
 
@@ -88,12 +88,12 @@ def setup_encoder(train_config, model_config, **kwargs):
 def setup_llm(train_config, model_config, **kwargs):
     
     model = AutoModelForCausalLM.from_pretrained(
-            model_config.llm_path,
+            model_config.llm_model,
             load_in_8bit=True if train_config.quantization else None,
             device_map="auto" if train_config.quantization else None,
     )
 
-    print_module_size(model, model_config.llm_path)
+    print_module_size(model, model_config.llm_model_name)
 
     if train_config.quantization:
         model = prepare_model_for_kbit_training(model)
