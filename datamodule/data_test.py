@@ -1,7 +1,7 @@
 import json
 import whisper
 
-data_path = "data/test.jsonl"
+data_path = "data/train-clean-360.jsonl"
 
 with open(data_path, "r", encoding="utf-8") as f:
     first_line = f.readline()
