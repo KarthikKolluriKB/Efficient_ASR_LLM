@@ -109,6 +109,8 @@ def main():
     projector_params = [p for p in model.encoder_projector.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(projector_params, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
 
+    logger.info(f"Model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters")
+
     # Dataset and DataLoader
     # FIXME: currently only support train dataset )
     split = cfg.data.get("train_split", cfg.data.get("test_split", "train"))
@@ -124,6 +126,8 @@ def main():
         pin_memory=(device == "cuda")
     )
 
+    logger.info(f"Train dataset: {len(train_ds)} samples, {len(train_dataloader)} batches")
+
     # Validation dataloader 
     val_split = cfg.data.get("val_split", "dev")
     vald_ds = get_speech_dataset(cfg.data, tokenizer, split=val_split)
@@ -136,6 +140,8 @@ def main():
         pin_memory=(device == "cuda")
     )
 
+    logger.info(f"Validation dataset: {len(vald_ds)} samples, {len(val_dataloader)} batches")
+
     # W&B init 
     run = None 
     if cfg.log.use_wandb:
@@ -143,9 +149,10 @@ def main():
             use_wand=True, 
             project=cfg.log.wandb_project_name,
             run_name=cfg.log.wandb_exp_name,
-            tags=[cfg.model.llm_model, cfg.model.encoder_name, cfg.model.encoder_projector, "projector-only"],
+            tags=[cfg.model.llm_model_name, cfg.model.encoder_model_name, cfg.model.encoder_projector, "projector-only"],
             config=OmegaConf.to_container(cfg, resolve=True)
         )
+        logger.info("Initialized W&B run")
 
     # Mixed precision and scaler
     use_autocast = bool(cfg.train.mixed_precision and device == "cuda")
