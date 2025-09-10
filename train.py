@@ -13,9 +13,61 @@ from utils.log_config import get_logger
 from utils.wand_config import init_wandb
 from models.model import model_builder
 from datamodule.dataset import get_speech_dataset
+from utils.metrics import next_token_accuracy_from_logits
 import sys
 
+
+def evaluate(model, dataloader, device, enc_dtype):
+    """
+    Evaluate the model on the validation dataset.
+    Returns the average loss.
+
+    Args:
+        model: The model to evaluate.
+        dataloader: DataLoader for the validation dataset.
+        device: Device to run the evaluation on.
+        enc_dtype: Data type for the encoder (to match Whisper encoder dtype).
+
+    Returns:
+        Average loss over the validation dataset.
+    """
+    model.eval()
+
+    total_loss, n_batches = 0.0, 0
+    total_corr, total_cnt = 0, 0
+
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            audio_mel = batch["audio_mel"].to(device).to(enc_dtype)
+            outputs, _ = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                audio_mel=audio_mel
+            )
+            total_loss += outputs.loss.item()
+            n_batches += 1
+
+            # Compute accuracy for logging
+            acc, correct, cnt = next_token_accuracy_from_logits(
+                outputs.logits, labels, ignore_label=-100, return_counts=True
+            )
+            total_corr += correct
+            total_cnt += cnt
+    
+    val_loss = total_loss / max(n_batches, 1)
+    val_acc = total_corr / max(total_cnt, 1)
+
+    model.train()
+    return val_loss, val_acc
+
 def main(): 
+    """
+    Main training loop for training the projector module.
+    """
     # parser = argparse.ArgumentParser() 
     # parser.add_argument("--config", type=str, default="configs/config.yaml", required=True, help="Path to the config file.")
     # args = parser.parse_args() 
@@ -24,22 +76,21 @@ def main():
     # load YAML into an OmegaConf dict
     cfg = OmegaConf.load(args.config)
 
-    # Prepare I/O 
+    # Prepare logging/output directories
     ensure_dir(cfg.train.output_dir)
-    log_dir = os.path.join(cfg.log.log_dir) or "."
+    log_dir = os.path.join(cfg.log.log_dir) if cfg.log.log_dir else "."
     ensure_dir(log_dir)
     logger = get_logger(log_dir=log_dir, filename=os.path.basename(cfg.log.log_filename))
     logger.info(f"Loaded configuration file from {args.config}")
 
     # Seed and device
     set_seed(cfg.train.seed)
+    logger.info(f"Set random seed to {cfg.train.seed}")
     device = get_device() 
     logger.info(f"Device: {device}")
 
     # Model (ASR + LLM)
     model, tokenizer = model_builder(cfg.train, cfg.model)
-
-    # Ensure a valid pad_token_id for Llama-style tokenizers
     pad_id = resolve_pad_token(tokenizer, model.llm)
     logger.info(f"Resolved pad_token_id: {pad_id}")
 
@@ -73,6 +124,18 @@ def main():
         pin_memory=(device == "cuda")
     )
 
+    # Validation dataloader 
+    val_split = cfg.data.get("val_split", "dev")
+    vald_ds = get_speech_dataset(cfg.data, tokenizer, split=val_split)
+    val_dataloader = DataLoader(
+        vald_ds, 
+        batch_size=cfg.train.val_batch_size,
+        shuffle=False,
+        collate_fn=vald_ds.collator,
+        num_workers=cfg.train.num_workers,
+        pin_memory=(device == "cuda")
+    )
+
     # W&B init 
     run = None 
     if cfg.log.use_wandb:
@@ -93,9 +156,10 @@ def main():
 
     # Training loop
     global_step = 0
-    best_loss = float("inf")
+    best_val_loss = float("inf")
     start_time = time.time()
     model.train()
+
     logger.info("Starting training...")
 
     for epoch in range(cfg.train.num_epochs):
@@ -123,6 +187,11 @@ def main():
                         audio_mel=audio_mel
                     )
                     loss = outputs.loss
+                    # Compute accuracy for logging
+                    with torch.no_grad():
+                        acc, correct, cnt = next_token_accuracy_from_logits(
+                            outputs.logits, labels, ignore_label=-100, return_counts=True
+                        )
             else: 
                 # Forward pass
                 outputs, _ = model(
@@ -149,31 +218,53 @@ def main():
 
             if global_step % cfg.log.log_interval == 0: 
                 elapsed = time.time() - start_time
-                lr = optimizer.param_groups["lr"]
-                logger.info(f"Epoch={epoch} Step={global_step} Loss={loss.item():.4f} LR={lr:.6e} Time={elapsed:.2f}s")
+                lr = optimizer.param_groups[0]["lr"]
+                logger.info(f"Epoch={epoch} Step={global_step} Loss={loss.item():.4f} Acc={float(acc):.4f} LR={lr:.6e} Time={elapsed:.2f}s")
                 if run is not None: 
                     run.log({
                         "train/loss": loss.item(),
+                        "train/acc": acc.item(),
                         "train/lr": lr,
                         "train/epoch": epoch,
                         "train/step": global_step,
                         "train/time_elapsed": elapsed
                     }, step=global_step)
+                # Reset start time
                 start_time = time.time()
 
-            if cfg.train.save_model and global_step % cfg.train.validation_interval == 0: 
-                ckpt_path = os.path.join(cfg.train.output_dir, f"projector_step{global_step}.pt")
-                save_projector(model, ckpt_path, global_step)
-                logger.info(f"Saved checkpoint: {ckpt_path}")
 
-            if loss.item() < best_loss: 
-                best_loss = loss.item() 
-                best_path = os.path.join(cfg.train.output_dir, f"projector_best.pt")
-                save_projector(model, best_path, global_step)
+        # Validation at the end of each epoch
+        val_loss, val_acc = evaluate(model, val_dataloader, device, enc_dtype)
+        logger.info(f"Epoch {epoch} Validation Loss: {val_loss:.4f}, Validation Acc: {val_acc:.4f}")
+        if run is not None: 
+            run.log({
+                "val/loss": val_loss,
+                "val/acc": val_acc,
+                "val/epoch": epoch
+            }, step=global_step)
 
+        # Save best model
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_val_path = os.path.join(cfg.train.output_dir, "projector_best.pt")
+            save_projector(model, best_val_path, global_step)
+            logger.info(f"New best model saved at step {global_step} to {best_val_path} with val_loss {best_val_loss:.4f}")
+
+
+    # Final model checkpoint (for reference)
+    final_path = os.path.join(cfg.train.output_dir, "projector_final.pt")
+    save_projector(model, final_path, global_step)
+    logger.info(f"Final model checkpointed at: {final_path}")
+
+    # End of training     
     logger.info("Training completed.....")
+    logger.info("Training Time: {:.2f} minutes".format((time.time() - start_time) / 60))
+    logger.info(f"Best validation loss: {best_val_loss:.4f}")
+    logger.info(f"Final projector model saved to: {best_val_path}")
+
     if run is not None: 
         run.finish()
+
 
 if __name__ == "__main__":
     main()
