@@ -31,8 +31,10 @@ def model_builder(train_config, model_config, **kwargs):
     # 3. llm 
     llm = setup_llm(train_config, model_config, **kwargs)
 
+    # FIXME: temporarily force dtype to bfloat16 for projector to match Whisper encoder output dtype
     # 4. projector 
-    encoder_projector = setup_encoder_projector(train_config, model_config, **kwargs).to(torch.bfloat16)
+    #encoder_projector = setup_encoder_projector(train_config, model_config, **kwargs).to(torch.bfloat16)
+    encoder_projector = setup_encoder_projector(train_config, model_config, **kwargs) # fp32
 
     # 5. model
     model = ASRLLM(
@@ -89,6 +91,7 @@ def setup_llm(train_config, model_config, **kwargs):
     
     model = AutoModelForCausalLM.from_pretrained(
             model_config.llm_model,
+            torch_dtype=torch.bfloat16 if train_config.mixed_precision else torch.float32,
             load_in_8bit=True if train_config.quantization else None,
             device_map="auto" if train_config.quantization else None,
     )
@@ -98,7 +101,7 @@ def setup_llm(train_config, model_config, **kwargs):
     if train_config.quantization:
         model = prepare_model_for_kbit_training(model)
 
-    if train_config.freeze_llm: # TODO:to test offical `freeze_layers` and `num_freeze_layers`
+    if train_config.freeze_llm: 
         for name, param in model.named_parameters(): 
             param.requires_grad = False
         model.eval()
@@ -149,7 +152,6 @@ class ASRLLM(nn.Module):
 
         # tokenizer
         self.tokenizer = tokenizer
-        self.metric = kwargs.get("metric", None)
 
         self.train_config = train_config
         self.model_config = model_config
@@ -183,6 +185,8 @@ class ASRLLM(nn.Module):
         if getattr(self.train_config, "freeze_encoder", False):
             self.encoder.eval()
             context = torch.no_grad()
+        else:
+            context = torch.enable_grad()
 
         # 1. Whisper encode audio -> [B, n_mels, T] -> permute -> [B, T, n_mels] for var-length 
         with context:
@@ -215,7 +219,15 @@ class ASRLLM(nn.Module):
                 token_embeds = self.llm.model.model.embed_tokens(input_ids)
             else:
                 token_embeds = self.llm.get_input_embeddings()(input_ids)
-
+        
+        # Cast to LLM dtype (e.g., bfloat16)
+        llm_dtype = next(self.llm.parameters()).dtype
+        # Cast encoder outputs to LLM dtype if different (e.g., bfloat16)
+        if encoder_outputs.dtype != llm_dtype:
+            encoder_outputs = encoder_outputs.to(llm_dtype)
+        # Cast token embeddings to LLM dtype if different (e.g., bfloat16)
+        if token_embeds is not None and token_embeds.dtype != llm_dtype:
+            token_embeds = token_embeds.to(llm_dtype)
 
         # 4. Concat encoder feature and token embeddings (audio prefix + text token embeddings)
         if token_embeds is not None:
@@ -262,11 +274,4 @@ class ASRLLM(nn.Module):
 
         model_outputs = self.llm(**llm_kwargs)
 
-        # 8. Compute additional metrics
-        acc = -1 
-        if self.metric and labels is not None and hasattr(model_outputs, "logits"):
-            with torch.no_grad():
-                preds = torch.argmax(model_outputs.logits, dim=-1) # [B, T] 
-                acc = compute_accuracy(preds.detach()[:, :-1], labels.detach()[:, : -1], ignore_index=-100)
-
-        return model_outputs, acc
+        return model_outputs
