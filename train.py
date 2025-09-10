@@ -149,6 +149,9 @@ def main():
 
     # Mixed precision and scaler
     use_autocast = bool(cfg.train.mixed_precision and device == "cuda")
+    amp_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
+
+    # Grad Scaler for mixed precision
     scaler = torch.amp.GradScaler(enabled=bool(cfg.train.use_fp16))
 
     # Match Whisper encoder parameters dtype (prevent type mismatch)
@@ -177,9 +180,8 @@ def main():
             optimizer.zero_grad(set_to_none=True)
 
             if use_autocast:
-                with torch.autocast(device_type=device, dtype=torch.bfloat16 if enc_dtype == torch.bfloat16 else torch.float16): 
+                with torch.autocast(device_type=device, dtype=amp_dtype): 
                     # Forward pass
-                    # FIXME: Metric is not used currently
                     outputs, _ = model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
@@ -187,6 +189,7 @@ def main():
                         audio_mel=audio_mel
                     )
                     loss = outputs.loss
+                    
                     # Compute accuracy for logging
                     with torch.no_grad():
                         acc, correct, cnt = next_token_accuracy_from_logits(
