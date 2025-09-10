@@ -141,8 +141,8 @@ def main():
     if cfg.log.use_wandb:
         run = init_wandb(
             use_wand=True, 
-            project=cfg.log.wandb_project,
-            run_name=cfg.log.wandb_run_name,
+            project=cfg.log.wandb_project_name,
+            run_name=cfg.log.wandb_exp_name,
             tags=[cfg.model.llm_model, cfg.model.encoder_name, cfg.model.encoder_projector, "projector-only"],
             config=OmegaConf.to_container(cfg, resolve=True)
         )
