@@ -68,10 +68,10 @@ def main():
     """
     Main training loop for training the projector module.
     """
-    # parser = argparse.ArgumentParser() 
-    # parser.add_argument("--config", type=str, default="configs/config.yaml", required=True, help="Path to the config file.")
-    # args = parser.parse_args() 
-    args = argparse.Namespace( config='configs/config.yaml')
+    parser = argparse.ArgumentParser() 
+    parser.add_argument("--config", type=str, default="configs/config.yaml", required=True, help="Path to the config file.")
+    args = parser.parse_args() 
+    #args = argparse.Namespace( config='configs/config.yaml')
 
     # load YAML into an OmegaConf dict
     cfg = OmegaConf.load(args.config)
