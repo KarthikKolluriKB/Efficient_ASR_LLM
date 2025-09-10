@@ -14,3 +14,9 @@ data/
 
 
 logs/
+
+# output directory
+outputs/
+
+
+.env
