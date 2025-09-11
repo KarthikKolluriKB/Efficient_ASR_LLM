@@ -92,6 +92,7 @@ def setup_llm(train_config, model_config, **kwargs):
     model = AutoModelForCausalLM.from_pretrained(
             model_config.llm_model,
             torch_dtype=torch.bfloat16 if train_config.mixed_precision else torch.float32,
+            attn_implementation="sdpa",
             load_in_8bit=True if train_config.quantization else None,
             device_map="auto" if train_config.quantization else None,
     )
