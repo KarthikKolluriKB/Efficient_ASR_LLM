@@ -156,7 +156,28 @@ class ASRLLM(nn.Module):
         self.train_config = train_config
         self.model_config = model_config
 
-    
+
+    @staticmethod
+    def _masked_next_token_accuracy(logits: torch.FloatTensor,
+                                labels: torch.LongTensor,
+                                ignore_label: int = -100,
+                                return_counts: bool = True):
+        """
+        Compute masked next-token accuracy with standard causal shift:
+        compare logits at t vs labels at t+1, ignoring positions == ignore_label.
+        """
+        # logits: [B, T, V], labels: [B, T]
+        preds = logits.argmax(dim=-1)                # [B, T]
+        preds = preds[:, :-1]                        # [B, T-1]
+        tgt = labels[:, 1:]                          # [B, T-1]
+        mask = tgt.ne(ignore_label)                  # [B, T-1]
+        if mask.sum().item() == 0:
+            return (preds.new_tensor(0.0), 0, 0) if return_counts else preds.new_tensor(0.0)
+        num_correct = (preds.eq(tgt) & mask).sum()
+        denom = mask.sum()
+        acc = num_correct.float() / denom.float()
+        return (acc, num_correct.item(), denom.item()) if return_counts else acc
+
 
     def forward(
             self,
@@ -274,4 +295,13 @@ class ASRLLM(nn.Module):
 
         model_outputs = self.llm(**llm_kwargs)
 
-        return model_outputs
+        # Metrics
+        metrics = None 
+        if labels is not None and hasattr(model_outputs, "logits"):
+            with torch.no_grad():
+                acc, num_correct, denom = self._masked_next_token_accuracy(
+                    model_outputs.logits, labels, ignore_label=-100, return_counts=True
+                )
+            metrics = {"acc": float(acc.item()), "num_correct": num_correct, "num_total": denom}
+
+        return model_outputs, metrics
