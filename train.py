@@ -13,7 +13,6 @@ from utils.log_config import get_logger
 from utils.wand_config import init_wandb
 from models.model import model_builder
 from datamodule.dataset import get_speech_dataset
-from utils.metrics import next_token_accuracy_from_logits
 import sys
 
 
@@ -42,7 +41,7 @@ def evaluate(model, dataloader, device, enc_dtype):
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
             audio_mel = batch["audio_mel"].to(device).to(enc_dtype)
-            outputs, _ = model(
+            outputs, metrics = model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels,
@@ -51,15 +50,12 @@ def evaluate(model, dataloader, device, enc_dtype):
             total_loss += outputs.loss.item()
             n_batches += 1
 
-            # Compute accuracy for logging
-            acc, correct, cnt = next_token_accuracy_from_logits(
-                outputs.logits, labels, ignore_label=-100, return_counts=True
-            )
-            total_corr += correct
-            total_cnt += cnt
+            if metrics is not None:
+                num_correct += metrics["num_correct"]
+                num_total += metrics["num_total"]
     
     val_loss = total_loss / max(n_batches, 1)
-    val_acc = total_corr / max(total_cnt, 1)
+    val_acc = num_correct / max(num_total, 1) if num_total > 0 else 0.0
 
     model.train()
     return val_loss, val_acc
@@ -189,7 +185,7 @@ def main():
             if use_autocast:
                 with torch.autocast(device_type=device, dtype=amp_dtype): 
                     # Forward pass
-                    outputs = model(
+                    outputs, metrics = model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         labels=labels,
@@ -197,11 +193,6 @@ def main():
                     )
                     loss = outputs.loss
                     
-                    # Compute accuracy for logging
-                    with torch.no_grad():
-                        acc, correct, cnt = next_token_accuracy_from_logits(
-                            outputs.logits, labels, ignore_label=-100, return_counts=True
-                        )
             else: 
                 # Forward pass
                 outputs = model(
@@ -211,6 +202,10 @@ def main():
                     audio_mel=audio_mel
                 )
                 loss = outputs.loss
+
+            # Accuracy for logging
+            if metrics is not None and "acc" in metrics:
+                acc = metrics["acc"]
 
             # Backward pass and optimization step
             if scaler.is_enabled(): 
@@ -233,7 +228,7 @@ def main():
                 if run is not None: 
                     run.log({
                         "train/loss": loss.item(),
-                        "train/acc": acc.item(),
+                        "train/acc": acc,
                         "train/lr": lr,
                         "train/epoch": epoch,
                         "train/step": global_step,
