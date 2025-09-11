@@ -64,6 +64,9 @@ def main():
     """
     Main training loop for training the projector module.
     """
+    # For better matmul performance on GPUs with Tensor Cores (e.g., A100, H100)
+    torch.set_float32_matmul_precision("high")   
+
     parser = argparse.ArgumentParser() 
     parser.add_argument("--config", type=str, default="configs/config.yaml", required=True, help="Path to the config file.")
     args = parser.parse_args() 
@@ -119,7 +122,8 @@ def main():
         collate_fn=train_ds.collator,
         num_workers=cfg.train.num_workers,
         # FIXME: check if device is cuda or cuda:0 
-        pin_memory=(device == "cuda")
+        pin_memory=(device == "cuda"),
+        persistent_workers=True if cfg.train.num_workers > 0 else False
     )
 
     logger.info(f"Train dataset: {len(train_ds)} samples, {len(train_dataloader)} batches")
@@ -133,7 +137,8 @@ def main():
         shuffle=False,
         collate_fn=vald_ds.collator,
         num_workers=cfg.train.num_workers,
-        pin_memory=(device == "cuda")
+        pin_memory=(device == "cuda"),
+        persistent_workers=True if cfg.train.num_workers > 0 else False
     )
 
     logger.info(f"Validation dataset: {len(vald_ds)} samples, {len(val_dataloader)} batches")
@@ -174,10 +179,10 @@ def main():
             global_step += 1
 
             # Move batch to device
-            input_ids = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
-            labels = batch["labels"].to(device)
-            audio_mel = batch["audio_mel"].to(device).to(enc_dtype)
+            input_ids = batch["input_ids"].to(device, non_blocking=True)
+            attention_mask = batch["attention_mask"].to(device, non_blocking=True)
+            labels = batch["labels"].to(device, non_blocking=True)
+            audio_mel = batch["audio_mel"].to(device, non_blocking=True).to(enc_dtype)
 
             # Optimizer zero grad
             optimizer.zero_grad(set_to_none=True)
