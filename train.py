@@ -189,7 +189,7 @@ def main():
             if use_autocast:
                 with torch.autocast(device_type=device, dtype=amp_dtype): 
                     # Forward pass
-                    outputs, _ = model(
+                    outputs = model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         labels=labels,
@@ -204,7 +204,7 @@ def main():
                         )
             else: 
                 # Forward pass
-                outputs, _ = model(
+                outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     labels=labels,
