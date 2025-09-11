@@ -1,0 +1,79 @@
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+  llm_model_name: llama3.2-1B
+  llm_model: meta-llama/Llama-3.2-1B
+  llm_model_path: null
+  llm_type: decoder_only
+  llm_dim: 2048                # hidden_size for 1B
+  encoder_model_name: whisper-base
+  encoder_model: openai/whisper-base
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_dim: 512
+  encoder_projector: linear
+  encoder_projector_ds_rate: 4
+  modal: audio
+  normalize: false
+  encoder_type: finetune
+
+train:
+  model_name: ASRLLM
+  run_validation: true
+  batch_size: 2
+  batching_strategy: packing
+  context_length: 256
+  gradient_accumulation_steps: 1
+  grad_clip: 1.0
+  num_epochs: 1
+  num_workers: 2
+  warmup_steps: 10
+  total_steps: 100
+  validation_interval: 50
+  lr: 1.0e-4
+  weight_decay: 0.01
+  gamma: 0.85
+  seed: 42
+  use_fp16: false
+  mixed_precision: true
+  val_batch_size: 2
+
+  use_peft: false
+  output_dir: outputs_smoke_1b/
+  freeze_layers: false
+  num_freeze_layers: 0
+  quantization: false
+  one_gpu: true
+  save_model: false
+  use_fast_kernels: false
+  freeze_llm: true
+  freeze_encoder: true
+
+data:
+  dataset: speech_dataset
+  file: datamodules/datasets.py:get_speech_dataset
+  train_data_path: data/test.jsonl
+  val_data_path: data/test.jsonl
+  test_data_path: data/test.jsonl
+  train_split: train
+  val_split: val
+  test_split: test
+  prompt: null
+  data_path: null
+  max_words: null
+  max_mel: null
+  fix_length_audio: -1
+  inference_mode: false
+  input_type: mel
+  mel_size: 80
+  normalize: false
+
+log:
+  use_wandb: false
+  wandb_dir: ./wandb
+  wandb_entity_name: ASRLLM_base
+  wandb_project_name: ASRLLM_base
+  wandb_exp_name: exp_smoke_llama3.2-1B_linear_proj_whisper-base
+  log_dir: ./logs
+  log_filename: train_smoke_1b.log
+  log_interval: 1
