@@ -52,9 +52,9 @@ train:
 data:
   dataset: speech_dataset
   file: datamodules/datasets.py:get_speech_dataset
-  train_data_path: data/test.jsonl
-  val_data_path: data/test.jsonl
-  test_data_path: data/test.jsonl
+  train_data_path: data/test-clean.jsonl
+  val_data_path: data/test-clean.jsonl
+  test_data_path: data/test-clean.jsonl
   train_split: train
   val_split: val
   test_split: test
