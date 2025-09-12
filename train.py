@@ -17,23 +17,9 @@ import sys
 
 
 def evaluate(model, dataloader, device, enc_dtype):
-    """
-    Evaluate the model on the validation dataset.
-    Returns the average loss.
-
-    Args:
-        model: The model to evaluate.
-        dataloader: DataLoader for the validation dataset.
-        device: Device to run the evaluation on.
-        enc_dtype: Data type for the encoder (to match Whisper encoder dtype).
-
-    Returns:
-        Average loss over the validation dataset.
-    """
     model.eval()
-
     total_loss, n_batches = 0.0, 0
-    total_corr, total_cnt = 0, 0
+    num_correct, num_total = 0, 0  # Ensure these are always initialized
 
     with torch.no_grad():
         for batch in dataloader:
@@ -45,15 +31,15 @@ def evaluate(model, dataloader, device, enc_dtype):
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels,
-                audio_mel=audio_mel
+                audio_mel=audio_mel,
             )
             total_loss += outputs.loss.item()
             n_batches += 1
 
             if metrics is not None:
-                num_correct += metrics["num_correct"]
-                num_total += metrics["num_total"]
-    
+                num_correct += metrics.get("num_correct", 0)
+                num_total  += metrics.get("num_total", 0)
+
     val_loss = total_loss / max(n_batches, 1)
     val_acc = num_correct / max(num_total, 1) if num_total > 0 else 0.0
 
