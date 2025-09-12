@@ -33,8 +33,8 @@ def model_builder(train_config, model_config, **kwargs):
 
     # FIXME: temporarily force dtype to bfloat16 for projector to match Whisper encoder output dtype
     # 4. projector 
-    #encoder_projector = setup_encoder_projector(train_config, model_config, **kwargs).to(torch.bfloat16)
-    encoder_projector = setup_encoder_projector(train_config, model_config, **kwargs) # fp32
+    encoder_projector = setup_encoder_projector(train_config, model_config, **kwargs).to(torch.bfloat16)
+    #encoder_projector = setup_encoder_projector(train_config, model_config, **kwargs) # fp32
 
     # 5. model
     model = ASRLLM(
@@ -216,6 +216,10 @@ class ASRLLM(nn.Module):
 
         if audio_mel_post_mask is None:
             audio_mel_post_mask = torch.ones(encoder_outputs.size()[:-1], dtype=torch.long, device=encoder_outputs.device) # [B, T_enc]
+
+        # determine the dtypes 
+        proj_dtype = next(self.encoder_projector.parameters()).dtype
+        llm_dtype  = next(self.llm.parameters()).dtype
 
         # 2. Projector (Project to LLM embedding space)
         if self.model_config.encoder_projector == "q-former":

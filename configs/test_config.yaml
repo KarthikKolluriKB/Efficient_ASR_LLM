@@ -5,7 +5,7 @@ model:
   llm_model: meta-llama/Llama-3.2-1B
   llm_model_path: null
   llm_type: decoder_only
-  llm_dim: 2048                # hidden_size for 1B
+  llm_dim: 2048               # hidden_size for 1B
   encoder_model_name: whisper-base
   encoder_model: openai/whisper-base
   encoder_ds_rate: 2
@@ -23,18 +23,18 @@ train:
   batch_size: 2
   batching_strategy: packing
   context_length: 256
-  gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 1            # no accumulation, micro-batch = effective batch
   grad_clip: 1.0
-  num_epochs: 1
+  num_epochs: 2
   num_workers: 2
   warmup_steps: 10
-  total_steps: 100
+  total_steps: 100                          # terminates after 100 steps
   validation_interval: 50
   lr: 1.0e-4
   weight_decay: 0.01
   gamma: 0.85
   seed: 42
-  use_fp16: false
+  use_fp16: false                           # use bf16 on A6000
   mixed_precision: true
   val_batch_size: 2
 
@@ -44,9 +44,9 @@ train:
   num_freeze_layers: 0
   quantization: false
   one_gpu: true
-  save_model: false
-  use_fast_kernels: false
-  freeze_llm: true
+  save_model: false                         # no checkpointing for test run
+  use_fast_kernels: false                   # kernel selection handled in code
+  freeze_llm: true                         # projector-only training
   freeze_encoder: true
 
 data:
@@ -69,10 +69,10 @@ data:
   normalize: false
 
 log:
-  use_wandb: false
+  use_wandb: true
   wandb_dir: ./wandb
-  wandb_entity_name: ASRLLM_base
-  wandb_project_name: ASRLLM_base
+  wandb_entity_name: ASRLLM_test
+  wandb_project_name: ASRLLM_test
   wandb_exp_name: exp_smoke_llama3.2-1B_linear_proj_whisper-base
   log_dir: ./logs
   log_filename: train_smoke_1b.log
