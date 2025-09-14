@@ -13,8 +13,8 @@ from utils.log_config import get_logger
 from utils.wand_config import init_wandb
 from models.model import model_builder
 from datamodule.dataset import get_speech_dataset
-import sys
-
+from torchtnt.utils.early_stop_checker import EarlyStopChecker
+#from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 def evaluate(model, dataloader, device, enc_dtype):
     model.eval()
@@ -45,6 +45,15 @@ def evaluate(model, dataloader, device, enc_dtype):
 
     model.train()
     return val_loss, val_acc
+
+
+# Early Stopping 
+early_stop = EarlyStopChecker(
+    mode="min",
+    patience=2,
+    min_delta=0.001, 
+    threshold_mode="abs"
+)
 
 def main(): 
     """
@@ -246,6 +255,10 @@ def main():
             save_projector(model, best_val_path, global_step)
             logger.info(f"New best model saved at step {global_step} to {best_val_path} with val_loss {best_val_loss:.4f}")
 
+        # early stopping 
+        if early_stop.check(val_loss):
+            logger.info(f"Early stopping at epoch: {epoch} (patience={early_stop.patience})")
+            break
 
     # Final model checkpoint (for reference)
     final_path = os.path.join(cfg.train.output_dir, "projector_final.pt")
