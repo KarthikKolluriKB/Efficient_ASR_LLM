@@ -20,12 +20,12 @@ model:
 train:
   model_name: ASRLLM
   run_validation: true
-  batch_size: 16                    # micro-batch per GPU
+  batch_size: 12                    # micro-batch per GPU
   batching_strategy: packing
   context_length: 384               # balance speed/quality on 3B
   gradient_accumulation_steps: 2    # effective batch ≈ 32
   grad_clip: 1.0
-  num_epochs: 5                     # with early stopping on dev-clean
+  num_epochs: 8                     # with early stopping on dev-clean
   num_workers: 8
   warmup_steps: 300                 # ~3% of ~8.9k total steps
   total_steps: 12000                # ceiling; loop uses epochs
@@ -36,7 +36,7 @@ train:
   seed: 42
   use_fp16: false                   # prefer bf16 on A6000
   mixed_precision: true
-  val_batch_size: 32                # larger no-grad batches speed up eval
+  val_batch_size: 16                # larger no-grad batches speed up eval
 
   use_peft: false
   output_dir: outputs_3b_base_100h/
