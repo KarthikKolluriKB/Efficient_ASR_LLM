@@ -33,14 +33,14 @@ def model_builder(train_config, model_config, **kwargs):
 
     # FIXME: temporarily force dtype to bfloat16 for projector to match Whisper encoder output dtype
     # 4. projector 
-    encoder_projector = setup_encoder_projector(train_config, model_config, **kwargs).to(torch.bfloat16)
+    projector = setup_projector(train_config, model_config, **kwargs).to(torch.bfloat16)
     #encoder_projector = setup_encoder_projector(train_config, model_config, **kwargs) # fp32
 
     # 5. model
     model = ASRLLM(
         encoder,
         llm,
-        encoder_projector,
+        projector,
         tokenizer,
         train_config,
         model_config,
@@ -49,11 +49,11 @@ def model_builder(train_config, model_config, **kwargs):
 
     # load ckpt 
     ckpt_path = kwargs.get("ckpt_path", None) 
-
+    # TODO: check models is loading correctly
     if ckpt_path is not None:
         logger.info(f"Load checkpoint from {ckpt_path}")
         ckpt_dir = torch.load(ckpt_path, map_location="cpu")
-        model.load_state_dict(ckpt_dir, strict=False)
+        model.projector.load_state_dict(ckpt_dir['projector'], strict=True)
     
     print_model_size(model, train_config)
 
@@ -113,20 +113,20 @@ def setup_llm(train_config, model_config, **kwargs):
 
 
 
-def setup_encoder_projector(train_config, model_config, **kwargs):
-    if model_config.encoder_projector == "linear":
+def setup_projector(train_config, model_config, **kwargs):
+    if model_config.projector == "linear":
         from models.projector import EncoderProjectorConcat
-        encoder_projector = EncoderProjectorConcat(model_config)
-    elif model_config.encoder_projector == "cov1d-linear":
+        projector = EncoderProjectorConcat(model_config)
+    elif model_config.projector == "cov1d-linear":
         from models.projector import EncoderProjectorCov1d
-        encoder_projector = EncoderProjectorCov1d(model_config)
-    elif model_config.encoder_projector == "q-former":
+        projector = EncoderProjectorCov1d(model_config)
+    elif model_config.projector == "q-former":
         from models.projector import EncoderProjectorQFormer
-        encoder_projector = EncoderProjectorQFormer(model_config)
+        projector = EncoderProjectorQFormer(model_config)
     else:
         return None
-    print_module_size(encoder_projector, model_config.encoder_projector)
-    return encoder_projector
+    print_module_size(projector, model_config.projector)
+    return projector
 
 
 class ASRLLM(nn.Module):
@@ -134,7 +134,7 @@ class ASRLLM(nn.Module):
     def __init__(self,
                  encoder: nn.Module,
                  llm: nn.Module,
-                 encoder_projector: Optional[nn.Module],
+                 projector: Optional[nn.Module],
                  tokenizer,
                  train_config,
                  model_config,
@@ -149,7 +149,7 @@ class ASRLLM(nn.Module):
         self.llm = llm
 
         # projector
-        self.encoder_projector = encoder_projector
+        self.projector = projector
 
         # tokenizer
         self.tokenizer = tokenizer
@@ -218,17 +218,17 @@ class ASRLLM(nn.Module):
             audio_mel_post_mask = torch.ones(encoder_outputs.size()[:-1], dtype=torch.long, device=encoder_outputs.device) # [B, T_enc]
 
         # determine the dtypes 
-        proj_dtype = next(self.encoder_projector.parameters()).dtype
+        proj_dtype = next(self.projector.parameters()).dtype
         llm_dtype  = next(self.llm.parameters()).dtype
 
         # 2. Projector (Project to LLM embedding space)
-        if self.model_config.encoder_projector == "q-former":
+        if self.model_config.projector == "q-former":
             # Q-former
-            encoder_outputs = self.encoder_projector(encoder_outputs, audio_mel_post_mask) # [B, T_enc_proj, D_llm]
+            encoder_outputs = self.projector(encoder_outputs, audio_mel_post_mask) # [B, T_enc_proj, D_llm]
 
-        elif self.model_config.encoder_projector in ["linear", "cov1d-linear"]:
+        elif self.model_config.projector in ["linear", "cov1d-linear"]:
             # linear or conv1d + linear
-            encoder_outputs = self.encoder_projector(encoder_outputs)  # [B, T_enc_proj, D_llm]
+            encoder_outputs = self.projector(encoder_outputs)  # [B, T_enc_proj, D_llm]
 
 
         # 3. Token embedding 
@@ -310,3 +310,74 @@ class ASRLLM(nn.Module):
             metrics = {"acc": float(acc.item()), "num_correct": num_correct, "num_total": denom}
 
         return model_outputs, metrics
+    
+    @torch.no_grad()
+    def inference(
+        self,
+        audio_mel: torch.Tensor, # [B, n_mels, T] or [n_mels, T]
+        prompt: str = "",
+        max_new_tokens: int = 64, 
+        temperature: float = 0.7, 
+        top_p: float = 0.9,
+        num_beams: int = 1, 
+        do_sample: bool = None,
+        device: str = None, 
+        **gen_kwargs
+    ):
+        """
+        Run Batched Inference. Assumes audio_mel is already preprocessed.
+        """
+        # 1. Ensure dtype/device consistency 
+        if device is None:
+            device = next(self.parameters()).device
+
+        llm_dtype = next(self.llm.parameters()).dtype
+
+        if audio_mel.dim() == 2: 
+            audio_mel = audio_mel.unsqueeze(0)
+
+        audio_mel = audio_mel.to(device, dtype=llm_dtype)
+
+        # 2. Tokenize prompt 
+        input = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
+        input_ids = input["input_ids"].to(device)
+        attention_mask = input["attention_mask"].to(device)
+        prompt_len = input_ids.shape[1]
+
+        # 3. Forward to get input_embeds for generation 
+        inputs_embeds, attn_mask = self.forward(
+            input_ids=input_ids, 
+            attention_mask=attention_mask,
+            audio_mel=audio_mel,
+            inference_mode = True
+        )
+
+        # 4. Decide on sampling vs beam search
+        if do_sample is None: 
+            do_sample = num_beams == 1 and temperature > 0.0 
+
+        # 5. Generate tokens from LLM 
+        gen_ids = self.llm.generate(
+            inputs_embeds=inputs_embeds, 
+            attention_mask=attn_mask,
+            max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_p=top_p,
+            num_beams=num_beams if not do_sample else 1, 
+            eos_token_id = self.tokenizer.eos_token_id,
+            pad_token_id = self.tokenizer.pad_token_id,
+            use_cache=True,
+            **gen_kwargs
+        )
+
+        # Strip prompt (as LLM sees concatenated audio prefix + prompt) 
+        full_token_ids = gen_ids[:, prompt_len:]
+
+        # Decode to text 
+        texts = self.tokenizer.batch_decode(full_token_ids, skip_special_tokens=True)
+
+        if audio_mel.size(0) == 1: 
+            texts = texts[0]
+
+        return texts
