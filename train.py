@@ -59,7 +59,7 @@ def main():
     """
     Main training loop for training the projector module.
     """
-    # For better matmul performance on GPUs with Tensor Cores (e.g., A100, H100)
+    # For better matmul performance on GPUs with Tensor Cores 
     torch.set_float32_matmul_precision("high")   
 
     parser = argparse.ArgumentParser() 
@@ -100,7 +100,7 @@ def main():
             p.requires_grad = False
 
     # Optimizer only for projector
-    projector_params = [p for p in model.encoder_projector.parameters() if p.requires_grad]
+    projector_params = [p for p in model.projector.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(projector_params, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
 
     logger.info(f"Model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters")
@@ -145,7 +145,7 @@ def main():
             use_wand=True, 
             project=cfg.log.wandb_project_name,
             run_name=cfg.log.wandb_exp_name,
-            tags=[cfg.model.llm_model_name, cfg.model.encoder_model_name, cfg.model.encoder_projector, "projector-only"],
+            tags=[cfg.model.llm_model_name, cfg.model.encoder_model_name, cfg.model.projector, "projector-only"],
             config=OmegaConf.to_container(cfg, resolve=True)
         )
         logger.info("Initialized W&B run")
