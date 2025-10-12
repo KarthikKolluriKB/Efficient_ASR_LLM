@@ -13,13 +13,17 @@ from utils.log_config import get_logger
 from utils.wand_config import init_wandb
 from models.model import model_builder
 from datamodule.dataset import get_speech_dataset
-from torchtnt.utils.early_stop_checker import EarlyStopChecker
+from utils.metrics import decode_texts_from_outputs, compute_wer
+from utils.train_utils import print_model_size, print_module_size, save_and_print_examples
+
+#from torchtnt.utils.early_stop_checker import EarlyStopChecker
 #from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 def evaluate(model, dataloader, device, enc_dtype):
     model.eval()
     total_loss, n_batches = 0.0, 0
     num_correct, num_total = 0, 0  # Ensure these are always initialized
+    all_hyp_texts, all_ref_texts = [], []
 
     with torch.no_grad():
         for batch in dataloader:
@@ -40,20 +44,39 @@ def evaluate(model, dataloader, device, enc_dtype):
                 num_correct += metrics.get("num_correct", 0)
                 num_total  += metrics.get("num_total", 0)
 
+            # Decode texts per-batch hyp and ref texts for WER
+            hyp_texts, ref_texts = decode_texts_from_outputs(
+                outputs=outputs,
+                labels=labels,
+                tokenizer=model.tokenizer,
+                ignore_index=-100,
+                shift_causal=True,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True
+            )
+            # Accumulate all texts
+            all_hyp_texts.extend(hyp_texts)
+            all_ref_texts.extend(ref_texts)
+
     val_loss = total_loss / max(n_batches, 1)
     val_acc = num_correct / max(num_total, 1) if num_total > 0 else 0.0
 
+    # Compute WER over the entire validation set
+    val_wer_score = compute_wer(all_hyp_texts, all_ref_texts)
+    
+    val_word_acc = 1.0 - val_wer_score if val_wer_score >= 0.0 else 0.0
+    
     model.train()
-    return val_loss, val_acc
+    return val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts
 
 
 # Early Stopping 
-early_stop = EarlyStopChecker(
-    mode="min",
-    patience=2,
-    min_delta=0.001, 
-    threshold_mode="abs"
-)
+# early_stop = EarlyStopChecker(
+#     mode="min",
+#     patience=2,
+#     min_delta=0.001, 
+#     threshold_mode="abs"
+# )
 
 def main(): 
     """
@@ -163,6 +186,7 @@ def main():
     # Training loop
     global_step = 0
     best_val_loss = float("inf")
+    best_val_wer = float("inf")
     start_time = time.time()
     model.train()
 
@@ -207,6 +231,22 @@ def main():
             if metrics is not None and "acc" in metrics:
                 acc = metrics["acc"]
 
+            # Compute WER per batch 
+            hyp_texts, ref_texts = decode_texts_from_outputs(
+                outputs=outputs,
+                labels=labels,
+                tokenizer=model.tokenizer,
+                ignore_index=-100,
+                shift_causal=True,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True
+            )
+
+            batch_wer = compute_wer(hyp_texts, ref_texts)
+
+            # Word-level accuracy
+            word_acc = 1.0 - batch_wer if batch_wer >= 0.0 else 0.0
+
             # Backward pass and optimization step
             if scaler.is_enabled(): 
                 scaler.scale(loss).backward()
@@ -227,6 +267,8 @@ def main():
                 logger.info(f"Epoch={epoch} Step={global_step} Loss={loss.item():.4f} Acc={float(acc):.4f} LR={lr:.6e} Time={elapsed:.2f}s")
                 if run is not None: 
                     run.log({
+                        "train/wer": batch_wer,
+                        "train/word_acc": word_acc,
                         "train/loss": loss.item(),
                         "train/acc": acc,
                         "train/lr": lr,
@@ -239,26 +281,41 @@ def main():
 
 
         # Validation at the end of each epoch
-        val_loss, val_acc = evaluate(model, val_dataloader, device, enc_dtype)
-        logger.info(f"Epoch {epoch} Validation Loss: {val_loss:.4f}, Validation Acc: {val_acc:.4f}")
+        val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts = evaluate(model, val_dataloader, device, enc_dtype)
+        logger.info(f"Epoch {epoch} Val WER: {val_wer_score:.4f}, Val Word Acc: {val_word_acc:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
         if run is not None: 
             run.log({
+                "val/wer": val_wer_score,
+                "val/word_acc": val_word_acc,
                 "val/loss": val_loss,
                 "val/acc": val_acc,
                 "val/epoch": epoch
             }, step=global_step)
 
+
+        # Save hyp and ref texts for a few examples
+        save_and_print_examples(
+            hyp_texts=all_hyp_texts,
+            ref_texts=all_ref_texts,
+            output_path=cfg.train.output_dir,
+            epoch=epoch,
+            n_save=10,
+            n_print=5,
+            run=run,
+            seed=cfg.train.seed
+        )
+
         # Save best model
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_val_path = os.path.join(cfg.train.output_dir, "projector_best.pt")
+        if val_wer_score < best_val_wer:
+            best_val_wer = val_wer_score
+            best_val_path = os.path.join(cfg.train.output_dir, "projector_best_wer.pt")
             save_projector(model, best_val_path, global_step)
-            logger.info(f"New best model saved at step {global_step} to {best_val_path} with val_loss {best_val_loss:.4f}")
+            logger.info(f"New best model saved at step {global_step} to {best_val_path} with val_wer {best_val_wer:.4f}")
 
         # early stopping 
-        if early_stop.check(val_loss):
-            logger.info(f"Early stopping at epoch: {epoch} (patience={early_stop.patience})")
-            break
+        # if early_stop.check(val_loss):
+        #     logger.info(f"Early stopping at epoch: {epoch} (patience={early_stop.patience})")
+        #     break
 
     # Final model checkpoint (for reference)
     final_path = os.path.join(cfg.train.output_dir, "projector_final.pt")
@@ -268,7 +325,7 @@ def main():
     # End of training     
     logger.info("Training completed.....")
     logger.info("Training Time: {:.2f} minutes".format((time.time() - start_time) / 60))
-    logger.info(f"Best validation loss: {best_val_loss:.4f}")
+    logger.info(f"Best validation wer: {best_val_wer:.4f}")
     logger.info(f"Final projector model saved to: {best_val_path}")
 
     if run is not None: 
