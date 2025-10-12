@@ -4,7 +4,7 @@ import torch.nn as nn
 class EncoderProjectorConcat(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.k = config.encoder_projector_ds_rate
+        self.k = config.projector_ds_rate
         self.encoder_dim = config.encoder_dim
         self.llm_dim = config.llm_dim
         self.linear1 = nn.Linear(self.encoder_dim * self.k, 2048)
@@ -29,7 +29,7 @@ class EncoderProjectorConcat(nn.Module):
 class EncoderProjectorCov1d(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.k = config.encoder_projector_ds_rate
+        self.k = config.projector_ds_rate
         self.encoder_dim = config.encoder_dim
         self.llm_dim = config.llm_dim
         self.conv1d = nn.Conv1d(in_channels=self.encoder_dim, out_channels=self.encoder_dim, kernel_size=self.k, stride=self.k, padding=0)
