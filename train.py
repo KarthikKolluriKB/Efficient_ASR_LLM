@@ -264,7 +264,7 @@ def main():
             if global_step % cfg.log.log_interval == 0: 
                 elapsed = time.time() - start_time
                 lr = optimizer.param_groups[0]["lr"]
-                logger.info(f"Epoch={epoch} Step={global_step} Loss={loss.item():.4f} Acc={float(acc):.4f} LR={lr:.6e} Time={elapsed:.2f}s")
+                logger.info(f"Epoch={epoch} | Step={global_step} | WER={batch_wer:.4f} | W_ACC={word_acc:.4f} | Loss={loss.item():.4f} | Acc={float(acc):.4f} | LR={lr:.6e} | Time={elapsed:.2f}s")
                 if run is not None: 
                     run.log({
                         "train/wer": batch_wer,
@@ -282,7 +282,7 @@ def main():
 
         # Validation at the end of each epoch
         val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts = evaluate(model, val_dataloader, device, enc_dtype)
-        logger.info(f"Epoch {epoch} Val WER: {val_wer_score:.4f}, Val Word Acc: {val_word_acc:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+        logger.info(f"Epoch {epoch} | Val WER: {val_wer_score:.4f} | Val Word Acc: {val_word_acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
         if run is not None: 
             run.log({
                 "val/wer": val_wer_score,
