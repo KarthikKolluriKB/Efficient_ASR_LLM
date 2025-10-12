@@ -16,7 +16,7 @@ data/
 logs/
 
 # output directory
-outputs/
+outputs_3b_100h/
 
 
 .env
