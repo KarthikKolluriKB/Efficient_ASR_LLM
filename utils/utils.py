@@ -56,9 +56,19 @@ def ensure_dir(dir_path: str):
     os.makedirs(dir_path, exist_ok=True)
 
 def save_projector(model, path: str, step: int):
-    torch.save({"step": step, "projector": model.encoder_projector.state_dict()}, path)
-    print(f"Projector saved at step {step} to {path}")
+    """
+    Save the projector weights to `path` under the key "projector".
 
-# TODO: Need to implement this function
-def load_projector(model, path: str) -> Optional[int]:
-    pass
+    This function prefers `model.projector` but falls back to
+    `model.encoder_projector` for backward compatibility with older code.
+    """
+    proj = None
+    if hasattr(model, "projector") and model.projector is not None:
+        proj = model.projector
+    elif hasattr(model, "encoder_projector") and model.encoder_projector is not None:
+        proj = model.encoder_projector
+    else:
+        raise AttributeError("Model has no attribute 'projector' or 'encoder_projector' to save.")
+
+    torch.save({"step": step, "projector": proj.state_dict()}, path)
+    print(f"Projector saved at step {step} to {path}")
