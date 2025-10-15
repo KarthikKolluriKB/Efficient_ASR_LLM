@@ -347,6 +347,9 @@ def main():
     if run is not None: 
         run.finish()
 
+if __name__ == "__main__":
+    main()
+
 
 # if __name__ == "__main__":
 #     sys.argv = ["train.py", "--config", "configs/test_config.yaml"]
