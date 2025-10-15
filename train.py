@@ -348,9 +348,9 @@ def main():
         run.finish()
 
 
-if __name__ == "__main__":
-    sys.argv = ["train.py", "--config", "configs/test_config.yaml"]
-    main()
+# if __name__ == "__main__":
+#     sys.argv = ["train.py", "--config", "configs/test_config.yaml"]
+#     main()
                 
             
 
