@@ -85,7 +85,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: ASRLLM
   wandb_project_name: ASRLLM_3B_base_100h
-  wandb_exp_name: exp_llama32_3b_whisper_base_linear_100h
+  wandb_exp_name: exp2_llama32_3b_whisper_base_linear_100h
   log_dir: ./logs
   log_filename: train_3b_100h.log
   log_interval: 100
