@@ -15,60 +15,79 @@ from models.model import model_builder
 from datamodule.dataset import get_speech_dataset
 from utils.metrics import decode_texts_from_outputs, compute_wer
 from utils.train_utils import print_model_size, print_module_size, save_and_print_examples
+import sys
 
 #from torchtnt.utils.early_stop_checker import EarlyStopChecker
 #from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-def evaluate(model, dataloader, device, enc_dtype):
+def evaluate(model, dataloader, device, enc_dtype, tokenizer):
+    """Evaluate the model on the given dataloader.
+    
+    Args:
+        model: The model to evaluate
+        dataloader: DataLoader containing validation/test data
+        device: Device to run evaluation on
+        enc_dtype: Data type for encoder inputs
+        
+    Returns:
+        tuple: Contains (validation loss, accuracy, WER score, word accuracy, 
+               hypothesis texts, reference texts)
+    """
     model.eval()
     total_loss, n_batches = 0.0, 0
-    num_correct, num_total = 0, 0  # Ensure these are always initialized
+    all_accuracies = []
+    all_wer_scores = []
     all_hyp_texts, all_ref_texts = [], []
 
     with torch.no_grad():
         for batch in dataloader:
+            # Move batch data to device
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
             audio_mel = batch["audio_mel"].to(device).to(enc_dtype)
+            
+            # Forward pass
             outputs, metrics = model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels,
                 audio_mel=audio_mel,
             )
+            
+            # Accumulate loss
             total_loss += outputs.loss.item()
             n_batches += 1
 
+            # Store metrics from model
             if metrics is not None:
-                num_correct += metrics.get("num_correct", 0)
-                num_total  += metrics.get("num_total", 0)
+                if "acc" in metrics:
+                    all_accuracies.append(metrics["acc"])
+                if "wer" in metrics:
+                    all_wer_scores.append(metrics["wer"])
 
-            # Decode texts per-batch hyp and ref texts for WER
+            # Get decoded texts from logits for final evaluation
             hyp_texts, ref_texts = decode_texts_from_outputs(
-                outputs=outputs,
+                logits=outputs.logits,
                 labels=labels,
-                tokenizer=model.tokenizer,
-                ignore_index=-100,
-                shift_causal=True,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True
+                tokenizer=tokenizer,
+                ignore_label=-100
             )
-            # Accumulate all texts
+            
+            # Accumulate texts
             all_hyp_texts.extend(hyp_texts)
             all_ref_texts.extend(ref_texts)
 
+    # Calculate final metrics
     val_loss = total_loss / max(n_batches, 1)
-    val_acc = num_correct / max(num_total, 1) if num_total > 0 else 0.0
-
-    # Compute WER over the entire validation set
-    val_wer_score = compute_wer(all_hyp_texts, all_ref_texts)
-    
+    val_acc = sum(all_accuracies) / max(len(all_accuracies), 1) if all_accuracies else 0.0
+    val_wer_score = sum(all_wer_scores) / max(len(all_wer_scores), 1) if all_wer_scores else 0.0
     val_word_acc = 1.0 - val_wer_score if val_wer_score >= 0.0 else 0.0
     
+    # Reset model to training mode
     model.train()
+    
     return val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts
-
 
 # Early Stopping 
 # early_stop = EarlyStopChecker(
@@ -233,13 +252,10 @@ def main():
 
             # Compute WER per batch 
             hyp_texts, ref_texts = decode_texts_from_outputs(
-                outputs=outputs,
+                logits=outputs.logits,
                 labels=labels,
-                tokenizer=model.tokenizer,
-                ignore_index=-100,
-                shift_causal=True,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True
+                tokenizer=tokenizer,
+                ignore_label=-100
             )
 
             batch_wer = compute_wer(hyp_texts, ref_texts)
@@ -281,7 +297,7 @@ def main():
 
 
         # Validation at the end of each epoch
-        val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts = evaluate(model, val_dataloader, device, enc_dtype)
+        val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts = evaluate(model, val_dataloader, device, enc_dtype, tokenizer=tokenizer)
         logger.info(f"Epoch {epoch} | Val WER: {val_wer_score:.4f} | Val Word Acc: {val_word_acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
         if run is not None: 
             run.log({
@@ -333,6 +349,7 @@ def main():
 
 
 if __name__ == "__main__":
+    sys.argv = ["train.py", "--config", "configs/test_config.yaml"]
     main()
                 
             

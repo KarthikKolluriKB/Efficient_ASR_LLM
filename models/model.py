@@ -14,7 +14,7 @@ from peft import PeftModel, PeftConfig
 
 
 from models.encoder import WhisperWrappedEncoder
-from utils.metrics import compute_accuracy
+from utils.metrics import compute_accuracy, compute_wer, decode_texts_from_outputs
 from utils.train_utils import print_model_size, print_module_size
 
 logger = logging.getLogger(__name__)
@@ -156,28 +156,12 @@ class ASRLLM(nn.Module):
 
         self.train_config = train_config
         self.model_config = model_config
+        
+        # Initialize metric flag for accuracy computation
+        self.metric = kwargs.get("metric", True)  # Default to True if not specified
 
 
-    @staticmethod
-    def _masked_next_token_accuracy(logits: torch.FloatTensor,
-                                labels: torch.LongTensor,
-                                ignore_label: int = -100,
-                                return_counts: bool = True):
-        """
-        Compute masked next-token accuracy with standard causal shift:
-        compare logits at t vs labels at t+1, ignoring positions == ignore_label.
-        """
-        # logits: [B, T, V], labels: [B, T]
-        preds = logits.argmax(dim=-1)                # [B, T]
-        preds = preds[:, :-1]                        # [B, T-1]
-        tgt = labels[:, 1:]                          # [B, T-1]
-        mask = tgt.ne(ignore_label)                  # [B, T-1]
-        if mask.sum().item() == 0:
-            return (preds.new_tensor(0.0), 0, 0) if return_counts else preds.new_tensor(0.0)
-        num_correct = (preds.eq(tgt) & mask).sum()
-        denom = mask.sum()
-        acc = num_correct.float() / denom.float()
-        return (acc, num_correct.item(), denom.item()) if return_counts else acc
+
 
 
     def forward(
@@ -200,6 +184,8 @@ class ASRLLM(nn.Module):
         audio_mel_post_mask = kwargs.get("audio_mel_post_mask", None) # optional, downsampled mask for whisper
         audio = kwargs.get("audio", None)
         audio_mask = kwargs.get("audio_mask", None)
+
+        modality_mask = kwargs.get("modality_mask", None)
 
         encoder_outputs = None 
 
@@ -257,8 +243,21 @@ class ASRLLM(nn.Module):
 
         # 4. Concat encoder feature and token embeddings (audio prefix + text token embeddings)
         if token_embeds is not None:
+             # Ensure encoder outputs and token embeddings have compatible shapes
+            B, T_enc, D = encoder_outputs.size()
+            B, T_tok, D = token_embeds.size()
+            
             inputs_embeds = torch.cat([encoder_outputs, token_embeds], dim=1) # [B, T_audio_enc + T_text_tok, D_llm]
-        else: 
+
+             # Ensure labels are properly aligned with the concatenated sequence
+            if labels is not None:
+                # Pad labels to match the total sequence length
+                total_length = T_enc + T_tok
+                if labels.size(1) < total_length:
+                    labels = F.pad(labels, (0, total_length - labels.size(1)), value=-100)
+                elif labels.size(1) > total_length:
+                    labels = labels[:, :total_length]
+        else:
             inputs_embeds = encoder_outputs
 
         # 5. Build attention mask aligned with inputs_embeds
@@ -270,12 +269,18 @@ class ASRLLM(nn.Module):
         else: 
             attention_mask = torch.ones((B, T_total), dtype=torch.long, device=inputs_embeds.device)
 
-        # 6. Labels: ignore loss on audio prefix (mask with ignore_index e.g: -100)
-        if labels is not None: 
-            if labels.dim() != 2: 
-                raise ValueError("Labels should be of shape 2D (B, T_text) for cross-entropy loss.")
-            ignore_pad = torch.full((B, T_audio), -100, dtype=labels.dtype, device=labels.device)
-            labels = torch.cat([ignore_pad, labels], dim=1) # [B, T_audio + T_text]
+        # # 6. Align encoder outputs using modality mask
+        # if modality_mask is not None:
+        #     modality_mask_start_indices = (modality_mask == True).float().argmax(dim=1)
+        #     modality_lengths = torch.clamp(modality_mask.sum(dim=1), max=encoder_outputs.shape[1]).tolist()
+
+        #     encoder_outputs_pad = torch.zeros_like(inputs_embeds)
+        #     for i in range(encoder_outputs.shape[0]):
+        #         encoder_outputs_pad[
+        #             i, modality_mask_start_indices[i]:modality_mask_start_indices[i]+modality_lengths[i]
+        #         ] = encoder_outputs[i][:modality_lengths[i]]
+            
+        #     inputs_embeds = encoder_outputs_pad + inputs_embeds * (~modality_mask[:, :, None])
 
         # 7. Forward LLM
 
@@ -283,31 +288,35 @@ class ASRLLM(nn.Module):
         if kwargs.get("inference_mode", False): 
             return inputs_embeds, attention_mask
         
-        # Forward through LLM using inputs_embeds only 
-        llm_kwargs = {
-            "inputs_embeds": inputs_embeds,
-            "attention_mask": attention_mask,
-            "labels": labels,
-            "use_cache": use_cache,
-            "output_attentions": output_attentions,
-            "output_hidden_states": output_hidden_states,
-            "return_dict": return_dict,
-            "past_key_values": past_key_values,
-            "position_ids": position_ids,
-        }
-
-        llm_kwargs = {k: v for k, v in llm_kwargs.items() if v is not None}
-
-        model_outputs = self.llm(**llm_kwargs)
-
+        # Default path for training / evaluation
+        model_outputs =  self.llm(inputs_embeds=inputs_embeds, 
+                                  attention_mask=attention_mask, 
+                                  labels=labels)
         # Metrics
-        metrics = None 
-        if labels is not None and hasattr(model_outputs, "logits"):
+        metrics = {}
+        if self.metric:
             with torch.no_grad():
-                acc, num_correct, denom = self._masked_next_token_accuracy(
-                    model_outputs.logits, labels, ignore_label=-100, return_counts=True
-                )
-            metrics = {"acc": float(acc.item()), "num_correct": num_correct, "num_total": denom}
+                # Compute token accuracy
+                preds = torch.argmax(model_outputs.logits, -1)
+                acc = compute_accuracy(preds.detach()[:, :-1], labels.detach()[:, 1:], ignore_label=-100)
+                metrics["acc"] = float(acc.item())
+
+                # Compute WER
+                if hasattr(model_outputs, "logits"):
+                    # First decode the texts using decode_texts_from_outputs
+                    hyp_texts, ref_texts = decode_texts_from_outputs(
+                        logits=model_outputs.logits,
+                        labels=labels,
+                        tokenizer=self.tokenizer,
+                        ignore_label=-100
+                    )
+                    
+                    # Then compute WER using the decoded texts
+                    wer_score = compute_wer(
+                        hyp_texts=hyp_texts,
+                        ref_texts=ref_texts
+                    )
+                    metrics["wer"] = float(wer_score)
 
         return model_outputs, metrics
     
