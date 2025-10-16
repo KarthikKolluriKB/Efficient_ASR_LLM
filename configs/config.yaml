@@ -7,7 +7,7 @@ model:
   llm_type: decoder_only
   llm_dim: 3072
   encoder_model_name: whisper-base
-  encoder_model: openai/whisper-base
+  encoder_model: base
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 512
