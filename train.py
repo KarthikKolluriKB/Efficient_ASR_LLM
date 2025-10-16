@@ -221,6 +221,7 @@ def main():
             attention_mask = batch["attention_mask"].to(device, non_blocking=True)
             labels = batch["labels"].to(device, non_blocking=True)
             audio_mel = batch["audio_mel"].to(device, non_blocking=True).to(enc_dtype)
+            modality_mask = batch['modality_mask'].to(device, non_blocking=True)
 
             # Optimizer zero grad
             optimizer.zero_grad(set_to_none=True)
@@ -232,7 +233,8 @@ def main():
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         labels=labels,
-                        audio_mel=audio_mel
+                        audio_mel=audio_mel,
+                        modality_mask=modality_mask
                     )
                     loss = outputs.loss
                     
@@ -242,7 +244,8 @@ def main():
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     labels=labels,
-                    audio_mel=audio_mel
+                    audio_mel=audio_mel,
+                    modality_mask=modality_mask
                 )
                 loss = outputs.loss
 
@@ -347,13 +350,9 @@ def main():
     if run is not None: 
         run.finish()
 
+
 if __name__ == "__main__":
     main()
-
-
-# if __name__ == "__main__":
-#     sys.argv = ["train.py", "--config", "configs/test_config.yaml"]
-#     main()
                 
             
 
