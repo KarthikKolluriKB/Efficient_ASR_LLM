@@ -187,9 +187,7 @@ class ASRLLM(nn.Module):
 
         modality_mask = kwargs.get("modality_mask", None)
 
-        encoder_outputs = None 
-
-        # Freeze encoder 
+        # Freeze encoder
         if getattr(self.train_config, "freeze_encoder", False):
             self.encoder.eval()
             context = torch.no_grad()
@@ -198,14 +196,10 @@ class ASRLLM(nn.Module):
 
         # 1. Whisper encode audio -> [B, n_mels, T] -> permute -> [B, T, n_mels] for var-length 
         with context:
-            encoder_outputs = self.encoder(audio_mel.permute(0, 2, 1)).last_hidden_state # [B, T_enc, D]
+            encoder_outputs = self.encoder.extract_variable_length_features(audio_mel.permute(0, 2, 1)) # bs*seq*dim
 
         if audio_mel_post_mask is None:
             audio_mel_post_mask = torch.ones(encoder_outputs.size()[:-1], dtype=torch.long, device=encoder_outputs.device) # [B, T_enc]
-
-        # determine the dtypes 
-        proj_dtype = next(self.projector.parameters()).dtype
-        llm_dtype  = next(self.llm.parameters()).dtype
 
         # 2. Projector (Project to LLM embedding space)
         if self.model_config.projector == "q-former":
@@ -218,80 +212,38 @@ class ASRLLM(nn.Module):
 
 
         # 3. Token embedding 
-        token_embeds = None 
         if input_ids is not None: 
             # Santize any placeholder ids for embedding lookup
-            input_ids = input_ids.clone()
             input_ids[input_ids == -1] = 0
     
             # Resolve embedding layer across model architectures
             if hasattr(self.llm, 'model') and hasattr(self.llm.model, "embed_tokens"):
-                token_embeds = self.llm.model.embed_tokens(input_ids)
+                inputs_embeds = self.llm.model.embed_tokens(input_ids)
             elif hasattr(self.llm, "model") and hasattr(self.llm.model, "model") and hasattr(self.llm.model.model, "embed_tokens"):
-                token_embeds = self.llm.model.model.embed_tokens(input_ids)
+                inputs_embeds = self.llm.model.model.embed_tokens(input_ids)
             else:
-                token_embeds = self.llm.get_input_embeddings()(input_ids)
+                inputs_embeds = self.llm.model.model.model.embed_tokens(input_ids)
+
         
-        # Cast to LLM dtype (e.g., bfloat16)
-        llm_dtype = next(self.llm.parameters()).dtype
-        # Cast encoder outputs to LLM dtype if different (e.g., bfloat16)
-        if encoder_outputs.dtype != llm_dtype:
-            encoder_outputs = encoder_outputs.to(llm_dtype)
-        # Cast token embeddings to LLM dtype if different (e.g., bfloat16)
-        if token_embeds is not None and token_embeds.dtype != llm_dtype:
-            token_embeds = token_embeds.to(llm_dtype)
+        if modality_mask is not None:
+            modality_mask_start_indices = (modality_mask == True).float().argmax(dim=1)
+            modality_lengths = torch.clamp(modality_mask.sum(dim=1), max=encoder_outputs.shape[1]).tolist()
 
-        # 4. Concat encoder feature and token embeddings (audio prefix + text token embeddings)
-        if token_embeds is not None:
-             # Ensure encoder outputs and token embeddings have compatible shapes
-            B, T_enc, D = encoder_outputs.size()
-            B, T_tok, D = token_embeds.size()
+            encoder_outs_pad = torch.zeros_like(inputs_embeds)
+            for i in range(encoder_outputs.shape[0]):
+                encoder_outs_pad[
+                    i, modality_mask_start_indices[i]:modality_mask_start_indices[i]+modality_lengths[i]
+                ] = encoder_outputs[i][:modality_lengths[i]]
             
-            inputs_embeds = torch.cat([encoder_outputs, token_embeds], dim=1) # [B, T_audio_enc + T_text_tok, D_llm]
-
-             # Ensure labels are properly aligned with the concatenated sequence
-            if labels is not None:
-                # Pad labels to match the total sequence length
-                total_length = T_enc + T_tok
-                if labels.size(1) < total_length:
-                    labels = F.pad(labels, (0, total_length - labels.size(1)), value=-100)
-                elif labels.size(1) > total_length:
-                    labels = labels[:, :total_length]
-        else:
-            inputs_embeds = encoder_outputs
-
-        # 5. Build attention mask aligned with inputs_embeds
-        B, T_total, _  = inputs_embeds.size()
-        T_audio = encoder_outputs.size(1)
-        if attention_mask is not None and input_ids is not None:
-            audio_attn = torch.ones((B, T_audio), dtype=attention_mask.dtype, device=inputs_embeds.device)
-            attention_mask = torch.cat([audio_attn, attention_mask], dim=1) # [B, T_audio + T_text_tok]
-        else: 
-            attention_mask = torch.ones((B, T_total), dtype=torch.long, device=inputs_embeds.device)
-
-        # # 6. Align encoder outputs using modality mask
-        # if modality_mask is not None:
-        #     modality_mask_start_indices = (modality_mask == True).float().argmax(dim=1)
-        #     modality_lengths = torch.clamp(modality_mask.sum(dim=1), max=encoder_outputs.shape[1]).tolist()
-
-        #     encoder_outputs_pad = torch.zeros_like(inputs_embeds)
-        #     for i in range(encoder_outputs.shape[0]):
-        #         encoder_outputs_pad[
-        #             i, modality_mask_start_indices[i]:modality_mask_start_indices[i]+modality_lengths[i]
-        #         ] = encoder_outputs[i][:modality_lengths[i]]
-            
-        #     inputs_embeds = encoder_outputs_pad + inputs_embeds * (~modality_mask[:, :, None])
-
-        # 7. Forward LLM
+            inputs_embeds = encoder_outs_pad + inputs_embeds * (~modality_mask[:, :, None])
 
         # Fast path for generation setup
         if kwargs.get("inference_mode", False): 
             return inputs_embeds, attention_mask
         
         # Default path for training / evaluation
-        model_outputs =  self.llm(inputs_embeds=inputs_embeds, 
-                                  attention_mask=attention_mask, 
-                                  labels=labels)
+        model_outputs = self.llm(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
+
         # Metrics
         metrics = {}
         if self.metric:
