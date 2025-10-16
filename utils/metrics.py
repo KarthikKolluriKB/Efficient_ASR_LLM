@@ -26,73 +26,49 @@ def compute_accuracy(pad_outputs: torch.LongTensor,
     return numerator.float() / denominator.float()
 
 def decode_texts_from_outputs(logits: torch.Tensor,
-                labels: torch.Tensor,
-                tokenizer: AutoTokenizer,
-                ignore_label: int = -100) -> Tuple[List[str], List[str]]:
-    """Decode logits and labels into text using the tokenizer.
-    
+                            labels: torch.Tensor, 
+                            tokenizer: AutoTokenizer,
+                            ignore_label: int = -100) -> Tuple[List[str], List[str]]:
+    """Decode model outputs and labels into texts.
+
     Args:
-        logits (torch.Tensor): Model output logits of shape (B, L, V)
-        labels (torch.Tensor): Label indices of shape (B, L) 
-        tokenizer (AutoTokenizer): Tokenizer for decoding indices to text
-        ignore_label (int): Label to ignore in computation
-        
+        logits (torch.Tensor): Prediction logits (B, L, V).
+        labels (torch.Tensor): Target label tensors (B, L).
+        tokenizer (AutoTokenizer): Tokenizer for decoding indices to text.
+        ignore_label (int): Label to ignore in decoding.
+
     Returns:
-        Tuple[List[str], List[str]]: Tuple of (hypothesis texts, reference texts)
+        Tuple[List[str], List[str]]: Tuple of (hypothesis texts, reference texts).
     """
     # Get predictions by taking argmax of logits
     pred_ids = torch.argmax(logits, dim=-1)  # (B, L)
     
-    # Handle shape mismatch between logits and labels
-    batch_size = pred_ids.size(0)
-    pred_seq_len = pred_ids.size(1)
-    label_seq_len = labels.size(1)
-    
-    # If logits are longer than labels (due to audio prefix), truncate predictions to match labels
-    if pred_seq_len > label_seq_len:
-        # Find audio prefix length by looking for first non-ignore label
-        audio_prefix_len = pred_seq_len - label_seq_len
-        pred_ids = pred_ids[:, audio_prefix_len:]  # Skip audio tokens
-    
-    # If labels are longer than predictions, truncate labels
-    elif label_seq_len > pred_seq_len:
-        labels = labels[:, :pred_seq_len]
-    
-    # Ensure shapes match after alignment
-    assert pred_ids.size() == labels.size(), f"Shape mismatch after alignment: pred_ids {pred_ids.shape} vs labels {labels.shape}"
-    
-    hyp_texts = []
-    ref_texts = []
-    
-    # Process each sequence in the batch
-    for pred, label in zip(pred_ids, labels):
-        # Remove padding and ignored labels
-        valid_mask = (label != ignore_label) & (label != tokenizer.pad_token_id)
+    # Align sequence lengths
+    seq_diff = pred_ids.size(1) - labels.size(1)
+    if seq_diff: 
+        raise ValueError(f"Prediction and label sequence lengths do not match: {pred_ids.size(1)} vs {labels.size(1)}")
         
-        # Skip if no valid tokens
-        if not valid_mask.any():
+    # Create mask for valid tokens
+    valid_mask = (labels != ignore_label)
+    
+    hyp_texts, ref_texts = [], []
+    for pred, label, mask in zip(pred_ids, labels, valid_mask):
+        # Select only valid tokens
+        valid_pred = pred[mask]
+        valid_label = label[mask]
+        
+        if len(valid_pred) == 0 or len(valid_label) == 0:
             continue
             
-        valid_label = label[valid_mask]
-        valid_pred = pred[valid_mask]
-        
-        # Skip empty sequences
-        if len(valid_label) == 0 or len(valid_pred) == 0:
-            continue
-        
         try:
-            # Decode to text and strip any extra whitespace
             pred_text = tokenizer.decode(valid_pred, skip_special_tokens=True).strip()
             label_text = tokenizer.decode(valid_label, skip_special_tokens=True).strip()
             
-            # Only add non-empty sequences
             if pred_text and label_text:
                 hyp_texts.append(pred_text)
                 ref_texts.append(label_text)
-        except Exception as e:
-            # Skip sequences that fail to decode
-            print(f"Warning: Failed to decode sequence - {e}")
-            continue
+        except:
+            raise ValueError("Decoding failed for predictions or labels.")
             
     return hyp_texts, ref_texts
 
