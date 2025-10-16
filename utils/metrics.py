@@ -33,7 +33,7 @@ def decode_texts_from_outputs(logits: torch.Tensor,
     
     Args:
         logits (torch.Tensor): Model output logits of shape (B, L, V)
-        labels (torch.Tensor): Label indices of shape (B, L)
+        labels (torch.Tensor): Label indices of shape (B, L) 
         tokenizer (AutoTokenizer): Tokenizer for decoding indices to text
         ignore_label (int): Label to ignore in computation
         
@@ -43,6 +43,24 @@ def decode_texts_from_outputs(logits: torch.Tensor,
     # Get predictions by taking argmax of logits
     pred_ids = torch.argmax(logits, dim=-1)  # (B, L)
     
+    # Handle shape mismatch between logits and labels
+    batch_size = pred_ids.size(0)
+    pred_seq_len = pred_ids.size(1)
+    label_seq_len = labels.size(1)
+    
+    # If logits are longer than labels (due to audio prefix), truncate predictions to match labels
+    if pred_seq_len > label_seq_len:
+        # Find audio prefix length by looking for first non-ignore label
+        audio_prefix_len = pred_seq_len - label_seq_len
+        pred_ids = pred_ids[:, audio_prefix_len:]  # Skip audio tokens
+    
+    # If labels are longer than predictions, truncate labels
+    elif label_seq_len > pred_seq_len:
+        labels = labels[:, :pred_seq_len]
+    
+    # Ensure shapes match after alignment
+    assert pred_ids.size() == labels.size(), f"Shape mismatch after alignment: pred_ids {pred_ids.shape} vs labels {labels.shape}"
+    
     hyp_texts = []
     ref_texts = []
     
@@ -50,25 +68,34 @@ def decode_texts_from_outputs(logits: torch.Tensor,
     for pred, label in zip(pred_ids, labels):
         # Remove padding and ignored labels
         valid_mask = (label != ignore_label) & (label != tokenizer.pad_token_id)
-        valid_label = label[valid_mask]
         
-        # For predictions, remove padding and positions that were ignored in labels
+        # Skip if no valid tokens
+        if not valid_mask.any():
+            continue
+            
+        valid_label = label[valid_mask]
         valid_pred = pred[valid_mask]
         
         # Skip empty sequences
         if len(valid_label) == 0 or len(valid_pred) == 0:
             continue
         
-        # Decode to text and strip any extra whitespace
-        pred_text = tokenizer.decode(valid_pred, skip_special_tokens=True).strip()
-        label_text = tokenizer.decode(valid_label, skip_special_tokens=True).strip()
-        
-        # Only add non-empty sequences
-        if pred_text and label_text:
-            hyp_texts.append(pred_text)
-            ref_texts.append(label_text)
+        try:
+            # Decode to text and strip any extra whitespace
+            pred_text = tokenizer.decode(valid_pred, skip_special_tokens=True).strip()
+            label_text = tokenizer.decode(valid_label, skip_special_tokens=True).strip()
+            
+            # Only add non-empty sequences
+            if pred_text and label_text:
+                hyp_texts.append(pred_text)
+                ref_texts.append(label_text)
+        except Exception as e:
+            # Skip sequences that fail to decode
+            print(f"Warning: Failed to decode sequence - {e}")
+            continue
             
     return hyp_texts, ref_texts
+
 
 def compute_wer(hyp_texts: List[str], ref_texts: List[str]) -> float:
     """Calculate Word Error Rate (WER) from hypothesis and reference texts.
