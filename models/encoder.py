@@ -1,9 +1,9 @@
 import types
 import torch
+import whisper
 import torch.nn as nn
 import torch.nn.functional as F
-from dataclasses import dataclass
-from transformers import WhisperModel
+
 
 
 class WhisperWrappedEncoder:
@@ -29,8 +29,9 @@ class WhisperWrappedEncoder:
 
             x = self.ln_post(x)
             return x
-    
-
-        encoder = WhisperModel.from_pretrained(model_config.encoder_model,torch_dtype=torch.bfloat16).encoder
+        
+        # whisper model
+        encoder = whisper.load_model(name=model_config.encoder_model, device='cuda').encoder
+        encoder.extract_variable_length_features = types.MethodType(extract_variable_length_features, encoder)
         
         return encoder
