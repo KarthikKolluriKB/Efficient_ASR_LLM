@@ -20,7 +20,7 @@ import sys
 #from torchtnt.utils.early_stop_checker import EarlyStopChecker
 #from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-def evaluate(model, dataloader, device, enc_dtype, tokenizer):
+def evaluate(model_cfg, model, dataloader, device, enc_dtype, tokenizer):
     """Evaluate the model on the given dataloader.
     
     Args:
@@ -38,6 +38,9 @@ def evaluate(model, dataloader, device, enc_dtype, tokenizer):
     all_accuracies = []
     all_wer_scores = []
     all_hyp_texts, all_ref_texts = [], []
+    
+    use_autocast = bool(model_cfg.train.mixed_precision and getattr(device, "type", str(device)) == "cuda")
+    amp_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
 
     with torch.no_grad():
         for batch in dataloader:
@@ -46,14 +49,29 @@ def evaluate(model, dataloader, device, enc_dtype, tokenizer):
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
             audio_mel = batch["audio_mel"].to(device).to(enc_dtype)
+            modality_mask = batch['modality_mask'].to(device)
             
-            # Forward pass
-            outputs, metrics = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels,
-                audio_mel=audio_mel,
-            )
+
+            if use_autocast:
+                with torch.autocast(device_type=device, dtype=amp_dtype): 
+                    # Forward pass
+                    outputs, metrics = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                        audio_mel=audio_mel,
+                        modality_mask=modality_mask
+                    )
+                    
+            else: 
+                # Forward pass
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels,
+                    audio_mel=audio_mel,
+                    modality_mask=modality_mask
+                )
             
             # Accumulate loss
             total_loss += outputs.loss.item()
