@@ -318,7 +318,7 @@ def main():
 
 
         # Validation at the end of each epoch
-        val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts = evaluate(model, val_dataloader, device, enc_dtype, tokenizer=tokenizer)
+        val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts = evaluate(cfg.model, model, val_dataloader, device, enc_dtype, tokenizer=tokenizer)
         logger.info(f"Epoch {epoch} | Val WER: {val_wer_score:.4f} | Val Word Acc: {val_word_acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
         if run is not None: 
             run.log({
