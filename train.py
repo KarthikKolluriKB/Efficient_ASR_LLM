@@ -20,7 +20,7 @@ import sys
 #from torchtnt.utils.early_stop_checker import EarlyStopChecker
 #from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-def evaluate(model_cfg, model, dataloader, device, enc_dtype, tokenizer):
+def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     """Evaluate the model on the given dataloader.
     
     Args:
@@ -39,7 +39,7 @@ def evaluate(model_cfg, model, dataloader, device, enc_dtype, tokenizer):
     all_wer_scores = []
     all_hyp_texts, all_ref_texts = [], []
     
-    use_autocast = bool(model_cfg.train.mixed_precision and getattr(device, "type", str(device)) == "cuda")
+    use_autocast = bool(cfg.train.mixed_precision and getattr(device, "type", str(device)) == "cuda")
     amp_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
 
     with torch.no_grad():
@@ -318,7 +318,7 @@ def main():
 
 
         # Validation at the end of each epoch
-        val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts = evaluate(cfg.model, model, val_dataloader, device, enc_dtype, tokenizer=tokenizer)
+        val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts = evaluate(cfg, model, val_dataloader, device, enc_dtype, tokenizer=tokenizer)
         logger.info(f"Epoch {epoch} | Val WER: {val_wer_score:.4f} | Val Word Acc: {val_word_acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
         if run is not None: 
             run.log({
