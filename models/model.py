@@ -156,12 +156,10 @@ class ASRLLM(nn.Module):
 
         self.train_config = train_config
         self.model_config = model_config
+        self.dataset_config = kwargs.get("data_config", None)
         
         # Initialize metric flag for accuracy computation
         self.metric = kwargs.get("metric", True)  # Default to True if not specified
-
-
-
 
 
     def forward(
@@ -200,6 +198,11 @@ class ASRLLM(nn.Module):
 
         if audio_mel_post_mask is None:
             audio_mel_post_mask = torch.ones(encoder_outputs.size()[:-1], dtype=torch.long, device=encoder_outputs.device) # [B, T_enc]
+
+        projector_dtype = next(self.projector.parameters()).dtype
+
+        if encoder_outputs.dtype != projector_dtype:
+            encoder_outputs = encoder_outputs.to(projector_dtype)
 
         # 2. Projector (Project to LLM embedding space)
         if self.model_config.projector == "q-former":
@@ -273,72 +276,137 @@ class ASRLLM(nn.Module):
         return model_outputs, metrics
     
     @torch.no_grad()
+    def generate(self,
+                input_ids: torch.LongTensor = None,
+                attention_mask: Optional[torch.Tensor] = None,
+                position_ids: Optional[torch.LongTensor] = None,
+                past_key_values: Optional[List[torch.FloatTensor]] = None,
+                inputs_embeds: Optional[torch.FloatTensor] = None,
+                labels: Optional[torch.LongTensor] = None,
+                use_cache: Optional[bool] = None,
+                output_attentions: Optional[bool] = None,
+                output_hidden_states: Optional[bool] = None,
+                return_dict: Optional[bool] = None,
+                **kwargs,
+                ):
+        kwargs["inference_mode"] = True
+
+        if inputs_embeds is None:
+            inputs_embeds, attention_mask = self.forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                labels=labels,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                **kwargs,
+            )
+
+        model_outputs = self.llm.generate(
+            inputs_embeds=inputs_embeds,
+            # max_length=kwargs.get("max_length", 200),
+            max_new_tokens=kwargs.get("max_new_tokens", 200),
+            num_beams=kwargs.get("num_beams", 4),
+            do_sample=kwargs.get("do_sample", False),
+            min_length=kwargs.get("min_length", 1),
+            top_p=kwargs.get("top_p", 1.0),
+            repetition_penalty=kwargs.get("repetition_penalty", 1.0),
+            length_penalty=kwargs.get("length_penalty", 1.0),
+            temperature=kwargs.get("temperature", 1.0),
+            attention_mask=attention_mask,
+            bos_token_id=self.tokenizer.bos_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
+            pad_token_id=self.tokenizer.pad_token_id
+        )
+
+        return model_outputs
+    
+    @torch.no_grad()
     def inference(
         self,
-        audio_mel: torch.Tensor, # [B, n_mels, T] or [n_mels, T]
-        prompt: str = "",
-        max_new_tokens: int = 64, 
-        temperature: float = 0.7, 
-        top_p: float = 0.9,
-        num_beams: int = 1, 
-        do_sample: bool = None,
-        device: str = None, 
-        **gen_kwargs
+        audio_path=None,
+        prompt=None,
+        generation_config=None,
+        logits_processor=None,
+        stopping_criteria=None,
+        prefix_allowed_tokens_fn=None,
+        synced_gpus=None,
+        assistant_model=None,
+        streamer=None,
+        negative_prompt_ids=None,
+        negative_prompt_attention_mask=None,
+        **kwargs,
     ):
-        """
-        Run Batched Inference. Assumes audio_mel is already preprocessed.
-        """
-        # 1. Ensure dtype/device consistency 
-        if device is None:
-            device = next(self.parameters()).device
+        # inference for asr model
 
-        llm_dtype = next(self.llm.parameters()).dtype
+        device = kwargs.get("device", "cuda")
+        if os.path.exists(audio_path):  # Audio-Text QA
+            import whisper
 
-        if audio_mel.dim() == 2: 
-            audio_mel = audio_mel.unsqueeze(0)
+            audio_raw = whisper.load_audio(audio_path)
+            audio_raw = whisper.pad_or_trim(audio_raw)
 
-        audio_mel = audio_mel.to(device, dtype=llm_dtype)
+            mel_size = getattr(
+                self.dataset_config, "mel_size", 80
+            )  # 80 for large v1 and v2, 128 for large v3
+            audio_mel = (
+                whisper.log_mel_spectrogram(audio_raw, n_mels=mel_size)
+                .permute(1, 0)[None, :, :]
+                .to(device)
+            )
 
-        # 2. Tokenize prompt 
-        input = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
-        input_ids = input["input_ids"].to(device)
-        attention_mask = input["attention_mask"].to(device)
-        prompt_len = input_ids.shape[1]
+            encoder_outs = self.encoder.extract_variable_length_features(
+                audio_mel.permute(0, 2, 1)
+            )
 
-        # 3. Forward to get input_embeds for generation 
-        inputs_embeds, attn_mask = self.forward(
-            input_ids=input_ids, 
-            attention_mask=attention_mask,
-            audio_mel=audio_mel,
-            inference_mode = True
+            
+            projector_dtype = next(self.projector.parameters()).dtype
+            encoder_outs = encoder_outs.to(projector_dtype)
+
+            if self.model_config.projector == "q-former":
+                audio_mel_post_mask = torch.ones(
+                    encoder_outs.size()[:-1], dtype=torch.long
+                ).to(encoder_outs.device)
+                encoder_outs = self.projector(encoder_outs, audio_mel_post_mask)
+            if self.model_config.projector == "linear":
+                encoder_outs = self.projector(encoder_outs)
+        else:  # Text QA
+            encoder_outs = torch.empty(
+                1, 0, self.llm.model.embed_tokens.embedding_dim
+            ).to(device)
+
+        prompt = "USER: {}\n ASSISTANT:".format(prompt)
+        prompt_ids = self.tokenizer.encode(prompt)
+        prompt_length = len(prompt_ids)
+        prompt_ids = torch.tensor(prompt_ids, dtype=torch.int64).to(device)
+
+        if hasattr(self.llm.model, "embed_tokens"):
+            inputs_embeds = self.llm.model.embed_tokens(prompt_ids)
+        elif hasattr(self.llm.model.model, "embed_tokens"):
+            inputs_embeds = self.llm.model.model.embed_tokens(prompt_ids)
+        else:
+            inputs_embeds = self.llm.model.model.model.embed_tokens(prompt_ids)
+
+        inputs_embeds = torch.cat(
+            (encoder_outs, inputs_embeds[None, :, :]), dim=1
+        )  # [audio,prompt]
+
+        attention_mask = torch.ones(inputs_embeds.size()[:-1], dtype=torch.long).to(
+            inputs_embeds.device
         )
 
-        # 4. Decide on sampling vs beam search
-        if do_sample is None: 
-            do_sample = num_beams == 1 and temperature > 0.0 
-
-        # 5. Generate tokens from LLM 
-        gen_ids = self.llm.generate(
-            inputs_embeds=inputs_embeds, 
-            attention_mask=attn_mask,
-            max_new_tokens=max_new_tokens,
-            do_sample=do_sample,
-            temperature=temperature,
-            top_p=top_p,
-            num_beams=num_beams if not do_sample else 1, 
-            eos_token_id = self.tokenizer.eos_token_id,
-            pad_token_id = self.tokenizer.pad_token_id,
-            use_cache=True,
-            **gen_kwargs
+        # generate
+        model_outputs = self.generate(
+            inputs_embeds=inputs_embeds, attention_mask=attention_mask, **kwargs
         )
 
-        # Strip prompt (as LLM sees concatenated audio prefix + prompt) 
-        full_token_ids = gen_ids[:, prompt_len:]
+        # Decode output ids to text
+        output_text = self.tokenizer.decode(
+            model_outputs[0], skip_special_tokens=True
+        )
 
-        # Decode to text 
-        texts = self.tokenizer.batch_decode(full_token_ids, skip_special_tokens=True)
-
-        if audio_mel.size(0) == 1: 
-            texts = texts[0]
-
-        return texts
+        return output_text
