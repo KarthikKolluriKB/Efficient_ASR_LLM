@@ -370,9 +370,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-                
-            
 
+    # Debugging flag
+    DEBUG = False
 
+    if DEBUG:
+        sys.argv = [
+            'train.py',
+            '--config', 'configs/test_config.yaml'
+        ]
+
+        main()
+    else:
+        main()
 
