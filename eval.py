@@ -191,7 +191,7 @@ def parse_args():
 
 if __name__ == "__main__":
     # For debugging: create temporary args
-    DEBUG = True
+    DEBUG = False
     if DEBUG:
         args = SimpleNamespace(
             cfg_path="configs/eval_config.yaml",
