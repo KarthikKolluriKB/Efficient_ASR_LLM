@@ -84,19 +84,13 @@ def run_eval(args):
 
             # Get labels
             labels = batch["labels"]
-
-            # # Compute Accuracy 
-            # preds = outputs
-            # batch_acc = compute_accuracy(preds.detach()[:, :-1], labels.detach()[:, 1:], ignore_label=-100)
-            # logger.info(f"Batch Accuracy: {batch_acc:.4f}")
             
 
             # Decode predictions and references
-            pred_texts, ref_texts = decode_texts_from_outputs(
-                logits=outputs.logits.detach(),
-                labels=labels.detach(),
-                tokenizer=tokenizer,
-                ignore_label=-100, 
+            pred_texts = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            ref_texts = tokenizer.batch_decode(
+                labels.masked_fill(labels == -100, tokenizer.pad_token_id), 
+                skip_special_tokens=True
             )
 
             # Compute WER for the batch
@@ -109,7 +103,6 @@ def run_eval(args):
                 run.log({
                     "batch_wer": batch_wer,
                     "batch_word_acc": 1 - batch_wer,
-                    #"batch_accuracy": batch_acc,
                     "num_samples": len(pred_texts),
 
                 })
@@ -118,16 +111,12 @@ def run_eval(args):
             avg_wer = total_wer / num_samples if num_samples > 0 else float("inf")
             logger.info(f"Test Average WER: {avg_wer:.4f}\n")
             logger.info(f"Test Average Word Accuracy: {1 - avg_wer:.4f}\n")
-            # Average Accuracy  
-            # avg_acc = batch_acc / num_samples if num_samples > 0 else 0.0
-            # logger.info(f"Test Average Accuracy: {avg_acc:.4f}\n")
 
 
             if run is not None:
                 run.log({
                     "avg_wer": avg_wer,
                     "avg_word_acc": 1 - avg_wer,
-                    #"avg_accuracy": avg_acc,
                     "total_samples": num_samples,
                 })
 
