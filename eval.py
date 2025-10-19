@@ -1,4 +1,5 @@
 import argparse
+from cProfile import label
 import json 
 import os 
 from pathlib import Path
@@ -15,7 +16,7 @@ from torch.utils.data import DataLoader
 
 # Internal imports
 from models.model import model_builder
-from utils.metrics import compute_wer
+from utils.metrics import compute_accuracy, compute_wer, decode_texts_from_outputs
 from datamodule.dataset import get_speech_dataset
 
 SPLIT = "test"
@@ -69,15 +70,25 @@ def run_eval(args):
                 max_new_tokens=args.max_new_tokens,
             )
 
+            # Get labels
+            labels = batch["labels"]
+
+            # Compute Accuracy 
+            preds = torch.argmax(outputs.logits, dim=-1)
+            batch_acc = compute_accuracy(preds.detach()[:, :-1], labels.detach()[:, 1:], ignore_label=-100)
+            logger.info(f"Batch Accuracy: {batch_acc:.4f}")
+            
+
             # Decode predictions and references
-            pred_texts = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            # Convert labels to reference texts, replacing -100 values with padding tokens
-            labels = batch["labels"].clone()
-            labels[labels == -100] = tokenizer.pad_token_id
-            ref_texts = tokenizer.batch_decode(labels, skip_special_tokens=True)
+            pred_texts, ref_texts = decode_texts_from_outputs(
+                logits=outputs.logits.detach(),
+                labels=labels.detach(),
+                tokenizer=tokenizer,
+                ignore_label=-100, 
+            )
 
             # Compute WER for the batch
-            batch_wer = compute_wer(ref_texts, pred_texts)
+            batch_wer = compute_wer(pred_texts, ref_texts)
             total_wer += batch_wer * len(pred_texts)
             num_samples += len(pred_texts)
 
@@ -92,8 +103,12 @@ def run_eval(args):
 
             # Average WER score 
             avg_wer = total_wer / num_samples if num_samples > 0 else float("inf")
-            logger.info(f"Test Average WER: {avg_wer:.4f}")
-        
+            logger.info(f"Test Average WER: {avg_wer:.4f}\n")
+            logger.info(f"Test Average Word Accuracy: {1 - avg_wer:.4f}\n")
+            # Average Accuracy  
+            avg_acc = batch_acc / num_samples if num_samples > 0 else 0.0
+            logger.info(f"Test Average Accuracy: {avg_acc:.4f}\n")
+
             # Save results to JSONL if specified
             if args.save_jsonl:
                 output_path = Path(args.save_jsonl)
@@ -107,6 +122,7 @@ def run_eval(args):
                     summary = {
                         "wer": avg_wer,
                         "word_acc": 1 - avg_wer,
+                        "accuracy": avg_acc,
                         "num_samples": num_samples,
                     }
                     f.write(json.dumps(summary) + "\n")
