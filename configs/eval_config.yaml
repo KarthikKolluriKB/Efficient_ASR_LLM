@@ -71,5 +71,5 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: ASRLLM_EVALS
   wandb_project_name: Evals_ASRLLM_llama3.2-3B
-  wandb_exp_name: exp_whisper_base_lin_proj_20h
+  wandb_exp_name: exp_whisper_base_lin_proj_100h
 
