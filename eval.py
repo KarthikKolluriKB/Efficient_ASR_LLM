@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any, Dict 
 
 import torch 
+import wandb
 from tqdm import tqdm
 import yaml
 import logging
@@ -18,6 +19,8 @@ from torch.utils.data import DataLoader
 from models.model import model_builder
 from utils.metrics import compute_accuracy, compute_wer, decode_texts_from_outputs
 from datamodule.dataset import get_speech_dataset
+from utils.train_utils import save_and_print_examples
+from utils.wand_config import init_wandb
 
 SPLIT = "test"
 BATCH_SIZE = 4
@@ -29,7 +32,17 @@ logger = logging.getLogger(__name__)
 def run_eval(args):
     # 1. Load config 
     cfg = OmegaConf.load(args.cfg_path) 
-    train_cfg, model_cfg, data_cfg = cfg.train, cfg.model, cfg.data
+    train_cfg, model_cfg, data_cfg, wandb_cfg = cfg.train, cfg.model, cfg.data, cfg.log
+
+    # Initialize wandb if specified
+    if wandb_cfg.use_wandb:
+        run = init_wandb(
+            use_wand=True,
+            project=wandb_cfg.wandb_project_name,
+            run_name=wandb_cfg.wandb_exp_name,
+            tags=["eval", "asr-llm"],
+            config=OmegaConf.to_container(cfg, resolve=True),
+        )
 
     # 2. Build Model/tokenizer and load projector weights
     model, tokenizer = model_builder(train_cfg, model_cfg, ckpt_path=args.ckpt_path)
@@ -51,7 +64,6 @@ def run_eval(args):
         pin_memory=True,
     )
     
-    results = []
     total_wer = 0 
     num_samples = 0
 
@@ -92,14 +104,15 @@ def run_eval(args):
             total_wer += batch_wer * len(pred_texts)
             num_samples += len(pred_texts)
 
-            # Save results
-            for idx, (pred, ref) in enumerate(zip(pred_texts, ref_texts)):
-                result = {
-                    "id": batch["ids"][idx],
-                    "prediction": pred,
-                    "reference": ref,
-                }
-                results.append(result)
+
+            if run is not None:
+                run.log({
+                    "batch_wer": batch_wer,
+                    "batch_word_acc": 1 - batch_wer,
+                    "batch_accuracy": batch_acc,
+                    "num_samples": len(pred_texts),
+
+                })
 
             # Average WER score 
             avg_wer = total_wer / num_samples if num_samples > 0 else float("inf")
@@ -109,25 +122,26 @@ def run_eval(args):
             avg_acc = batch_acc / num_samples if num_samples > 0 else 0.0
             logger.info(f"Test Average Accuracy: {avg_acc:.4f}\n")
 
-            # Save results to JSONL if specified
-            if args.save_jsonl:
-                output_path = Path(args.save_jsonl)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
 
-                with open(output_path, "w") as f: 
-                    for res in results:
-                        f.write(json.dumps(res) + "\n")
+            if run is not None:
+                run.log({
+                    "avg_wer": avg_wer,
+                    "avg_word_acc": 1 - avg_wer,
+                    "avg_accuracy": avg_acc,
+                    "total_samples": num_samples,
+                })
 
-                    # write summary at the end 
-                    summary = {
-                        "wer": avg_wer,
-                        "word_acc": 1 - avg_wer,
-                        "accuracy": avg_acc,
-                        "num_samples": num_samples,
-                    }
-                    f.write(json.dumps(summary) + "\n")
-
-                logger.info(f"Saved results to {output_path}")
+            # Save examples to results
+            save_and_print_examples(
+                hyp_texts=pred_texts,
+                ref_texts=ref_texts,
+                output_path=args.output_path,
+                epoch=0,
+                n_save=10,
+                n_print=5,
+                run=run,
+                seed=42
+            )
 
     logger.info("Evaluation Completed...!")
 
@@ -167,25 +181,25 @@ def parse_args():
         help="Maximum number of new tokens to generate.",
     )
     parser.add_argument(
-        "--save_jsonl",
+        "--output_path",
         type=str,
         default=None,
-        help="Path to save the evaluation results in JSONL format.",
+        help="Path to save the evaluation results.",
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     # For debugging: create temporary args
-    DEBUG = False
+    DEBUG = True
     if DEBUG:
         args = SimpleNamespace(
-            cfg_path="configs/config.yaml",
+            cfg_path="configs/eval_config.yaml",
             ckpt_path="outputs/ASRLLM_enc_lin_20h/projector_best_wer.pt",
             split="test",
             device="cuda" if torch.cuda.is_available() else "cpu",
             max_new_tokens=256,
-            save_jsonl="results.jsonl"
+            output_path="results.jsonl"
         )
         logger.info("Using debug arguments")
     else:
