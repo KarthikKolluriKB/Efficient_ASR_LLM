@@ -1,0 +1,75 @@
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+  llm_model_name: llama3.2-3B   
+  llm_model: meta-llama/Llama-3.2-3B
+  llm_model_path: null
+  llm_type: decoder_only
+  llm_dim: 3072
+  encoder_model_name: whisper-base
+  encoder_model: base
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_dim: 512
+  projector: linear
+  projector_ds_rate: 4 # if OOM from long prefixes, consider 6-8
+  modal: audio
+  normalize: false
+  encoder_type: finetune
+
+train:
+  model_name: ASRLLM
+  run_validation: true
+  batch_size: 8                   # micro-batch per GPU
+  batching_strategy: packing
+  context_length: 384               # balance speed/quality on 3B
+  gradient_accumulation_steps: 2    # effective batch ≈ 32
+  grad_clip: 1.0
+  num_epochs: 15                     # with early stopping on dev-clean
+  num_workers: 8
+  warmup_steps: 300                 # ~3% of ~8.9k total steps
+  total_steps: 12000                # ceiling; loop uses epochs
+  validation_interval: 1000         # validate each epoch via your loop
+  lr: 1.0e-4
+  weight_decay: 0.01
+  gamma: 0.85
+  seed: 42
+  use_fp16: false                   # prefer bf16 on A6000
+  mixed_precision: true
+  val_batch_size: 8                # larger no-grad batches speed up eval
+
+  use_peft: false
+  output_dir: outputs_3b_enc_base_100h/
+  freeze_layers: false
+  num_freeze_layers: 0
+  quantization: false
+  one_gpu: true
+  save_model: true
+  use_fast_kernels: false           # set SDPA in code
+  freeze_llm: true                  # projector-only
+  freeze_encoder: true
+
+data:
+  dataset: speech_dataset
+  file: datamodules/datasets.py:get_speech_dataset
+  test_data_path: data/test-clean.jsonl
+  train_split: train
+  val_split: val
+  test_split: test
+  prompt: null
+  data_path: null
+  max_words: null
+  max_mel: null
+  fix_length_audio: -1
+  inference_mode: false
+  input_type: mel
+  mel_size: 80
+  normalize: false
+
+log:
+  use_wandb: true
+  wandb_dir: ./wandb
+  wandb_entity_name: ASRLLM_EVALS
+  wandb_project_name: Evals_ASRLLM_llama3.2-3B_20h
+  wandb_exp_name: exp_whisper_base_lin_proj_20h
+
