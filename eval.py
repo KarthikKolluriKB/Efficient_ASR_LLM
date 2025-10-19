@@ -22,9 +22,6 @@ from datamodule.dataset import get_speech_dataset
 from utils.train_utils import save_and_print_examples
 from utils.wand_config import init_wandb
 
-SPLIT = "test"
-BATCH_SIZE = 4
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -35,6 +32,7 @@ def run_eval(args):
     train_cfg, model_cfg, data_cfg, wandb_cfg = cfg.train, cfg.model, cfg.data, cfg.log
 
     # Initialize wandb if specified
+    run = None
     if wandb_cfg.use_wandb:
         run = init_wandb(
             use_wand=True,
@@ -53,18 +51,20 @@ def run_eval(args):
     model.eval()
 
     # 3. Load Test Dataset
-    test_dataset = get_speech_dataset(data_cfg, tokenizer, split="test")
+    test_dataset = get_speech_dataset(data_cfg, tokenizer, split=args.split)
 
     test_dataloader = DataLoader(
         test_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=args.batch_size,
         shuffle=False,
         collate_fn=test_dataset.collator,
         num_workers=4,
         pin_memory=True,
     )
     
-    total_wer = 0 
+    # Initialize tracking variables
+    all_pred_texts = []
+    all_ref_texts = []
     num_samples = 0
 
     # Evaluation Loop
@@ -84,7 +84,6 @@ def run_eval(args):
 
             # Get labels
             labels = batch["labels"]
-            
 
             # Decode predictions and references
             pred_texts = tokenizer.batch_decode(outputs, skip_special_tokens=True)
@@ -93,49 +92,49 @@ def run_eval(args):
                 skip_special_tokens=True
             )
 
-            # Compute WER for the batch
-            batch_wer = compute_wer(pred_texts, ref_texts)
-            total_wer += batch_wer * len(pred_texts)
+            # Store predictions and references
+            all_pred_texts.extend(pred_texts)
+            all_ref_texts.extend(ref_texts)
             num_samples += len(pred_texts)
 
+            # Print some examples during evaluation
+            if num_samples <= 5:  # Print first 5 examples
+                logger.info("\nExample Predictions:")
+                for pred, ref in zip(pred_texts[:5], ref_texts[:5]):
+                    logger.info(f"Pred: {pred}")
+                    logger.info(f"Ref:  {ref}")
+                    logger.info("-" * 50)
 
-            if run is not None:
-                run.log({
-                    "batch_wer": batch_wer,
-                    "batch_word_acc": 1 - batch_wer,
-                    "num_samples": len(pred_texts),
+        # Compute final WER on complete test set
+        test_wer = compute_wer(all_pred_texts, all_ref_texts)
+        logger.info(f"\nTest Results:")
+        logger.info(f"Total Samples: {num_samples}")
+        logger.info(f"Test WER: {test_wer:.4f}")
+        logger.info(f"Test Word Accuracy: {1 - test_wer:.4f}")
 
-                })
+        # Log final metrics
+        if run is not None:
+            run.log({
+                "test/wer": test_wer,
+                "test/word_acc": 1 - test_wer,
+                "test/total_samples": num_samples,
+            })
 
-            # Average WER score 
-            avg_wer = total_wer / num_samples if num_samples > 0 else float("inf")
-            logger.info(f"Test Average WER: {avg_wer:.4f}\n")
-            logger.info(f"Test Average Word Accuracy: {1 - avg_wer:.4f}\n")
-
-
-            if run is not None:
-                run.log({
-                    "avg_wer": avg_wer,
-                    "avg_word_acc": 1 - avg_wer,
-                    "total_samples": num_samples,
-                })
-
-            # Save examples to results
+        # Save examples to results
+        if args.output_path:
             save_and_print_examples(
-                hyp_texts=pred_texts,
-                ref_texts=ref_texts,
+                hyp_texts=all_pred_texts,
+                ref_texts=all_ref_texts,
                 output_path=args.output_path,
                 epoch=0,
-                n_save=10,
-                n_print=5,
+                n_save=min(10, num_samples),
+                n_print=min(5, num_samples),
                 run=run,
                 seed=42
             )
 
-    logger.info("Evaluation Completed...!")
-
-    return avg_wer
-
+    logger.info("Evaluation Completed!")
+    return test_wer
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -150,6 +149,12 @@ def parse_args():
         type=str,
         required=True,
         help="Path to the model checkpoint.",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=32,
+        help="Batch size for evaluation.",
     )
     parser.add_argument(
         "--split",
@@ -177,7 +182,6 @@ def parse_args():
     )
     return parser.parse_args()
 
-
 if __name__ == "__main__":
     # For debugging: create temporary args
     DEBUG = False
@@ -194,4 +198,3 @@ if __name__ == "__main__":
     else:
         args = parse_args()
     run_eval(args)
-
