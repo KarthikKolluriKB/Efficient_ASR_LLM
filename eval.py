@@ -86,7 +86,7 @@ def run_eval(args):
             labels = batch["labels"]
 
             # Compute Accuracy 
-            preds = torch.argmax(outputs.logits, dim=-1)
+            preds = outputs
             batch_acc = compute_accuracy(preds.detach()[:, :-1], labels.detach()[:, 1:], ignore_label=-100)
             logger.info(f"Batch Accuracy: {batch_acc:.4f}")
             
