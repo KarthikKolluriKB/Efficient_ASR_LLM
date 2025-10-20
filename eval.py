@@ -12,8 +12,10 @@ from torch.utils.data import DataLoader
 # Internal imports
 from models.model import model_builder
 from datamodule.dataset import get_speech_dataset
+from utils.metrics import decode_texts_from_outputs
 from utils.wand_config import init_wandb
 from utils.log_config import get_logger
+from utils.train_utils import save_and_print_examples
 
 logger = get_logger(log_dir="logs", filename="eval.log")
 
@@ -74,6 +76,10 @@ def run_eval(args):
         running_loss = 0.0
         running_acc = 0.0
         running_wer = 0.0
+
+        # predicted_texts, target_texts
+        all_pred_texts = []
+        all_target_texts = []
         
         # 7. Evaluation Loop
         logger.info("Starting evaluation...")
@@ -93,6 +99,19 @@ def run_eval(args):
                 }
                 
                 outputs, metrics = model(**model_kwargs)
+
+
+                # Reference, Prediction texts
+                pred_texts, target_texts = decode_texts_from_outputs(
+                    logits=outputs.logits,
+                    labels=batch["labels"],
+                    tokenizer=tokenizer,
+                    ignore_label=-100,
+                )
+
+                # Accumulate all texts
+                all_pred_texts.extend(pred_texts)
+                all_target_texts.extend(target_texts)
                 
                 # Accumulate metrics with running averages for memory efficiency
                 batch_loss = outputs.loss.item()
@@ -115,6 +134,13 @@ def run_eval(args):
                     logger.info(f"Accuracy: {batch_acc:.4f}")
                     logger.info(f"WER: {batch_wer:.4f}")
                     logger.info(f"Word Accuracy: {1 - batch_wer:.4f}")
+
+                    # Log predicted vs target texts for first few batches
+                    for i in range(min(3, len(pred_texts))):
+                        logger.info("Prediction vs Target:")
+                        logger.info(f"\nSamples {i + 1} in Batch {batch_idx + 1}:")
+                        logger.info(f"Target: {target_texts[i]}")
+                        logger.info(f"Predicted: {pred_texts[i]}")
                 
                 # Clear cache periodically to prevent memory buildup
                 if batch_idx % 50 == 0 and device.type == 'cuda':
@@ -149,6 +175,16 @@ def run_eval(args):
                     "test/total_samples": num_samples,
                     "test/total_batches": num_batches,
                 })
+
+            # Save predictions and targets to JSONL
+            save_and_print_examples(all_pred_texts, 
+                                    all_target_texts, 
+                                    results_path=args.output_dir,
+                                    epoch=0,
+                                    n_save=10,
+                                    n_print=0,
+                                    run=run,
+                                    seed=42)
         else:
             logger.error("No batches were successfully processed!")
     
