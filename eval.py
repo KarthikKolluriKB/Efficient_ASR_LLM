@@ -43,7 +43,7 @@ def run_eval(args):
             run = init_wandb(
                 use_wand=True,
                 project=wandb_cfg.wandb_project_name,
-                run_name=wandb_cfg.wandb_exp_name,
+                run_name=args.wandb_exp_name if args.wandb_exp_name else wandb_cfg.wandb_experiment_name, # Use arg if provided
                 tags=["eval", "asr-llm"],
                 config=OmegaConf.to_container(cfg, resolve=True),
             )
@@ -137,7 +137,6 @@ def run_eval(args):
 
                     # Log predicted vs target texts for first few batches
                     for i in range(min(3, len(pred_texts))):
-                        logger.info("Prediction vs Target:")
                         logger.info(f"\nSamples {i + 1} in Batch {batch_idx + 1}:")
                         logger.info(f"Target: {target_texts[i]}")
                         logger.info(f"Predicted: {pred_texts[i]}")
@@ -274,6 +273,18 @@ def parse_args():
         type=str,
         default="cuda:0",
         help="Device to run the evaluation on.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="eval_results",
+        help="Directory to save evaluation results.",
+    )
+    parser.add_argument(
+        "--wandb_exp_name",
+        type=str,
+        default=None,
+        help="Wandb experiment name.",
     )
     return parser.parse_args()
 
