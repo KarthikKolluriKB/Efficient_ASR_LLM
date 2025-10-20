@@ -178,7 +178,7 @@ def run_eval(args):
             # Save predictions and targets to JSONL
             save_and_print_examples(all_pred_texts, 
                                     all_target_texts, 
-                                    results_path=args.output_dir,
+                                    output_path=args.output_dir,
                                     epoch=0,
                                     n_save=10,
                                     n_print=0,
