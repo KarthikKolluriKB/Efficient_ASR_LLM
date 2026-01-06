@@ -73,6 +73,9 @@ def decode_texts_from_outputs(logits: torch.Tensor,
     return hyp_texts, ref_texts
 
 
+# Cache WER metric to avoid reloading each call
+_wer_metric = None
+
 def compute_wer(hyp_texts: List[str], ref_texts: List[str]) -> float:
     """Calculate Word Error Rate (WER) from hypothesis and reference texts.
     
@@ -83,8 +86,21 @@ def compute_wer(hyp_texts: List[str], ref_texts: List[str]) -> float:
     Returns:
         float: Word Error Rate score (lower is better)
     """
+    global _wer_metric
+    
     if not hyp_texts or not ref_texts:
         return 0.0
-        
-    wer_metric = evaluate.load("wer")
-    return wer_metric.compute(predictions=hyp_texts, references=ref_texts)
+    
+    # Load WER metric once and cache it
+    if _wer_metric is None:
+        try:
+            _wer_metric = evaluate.load("wer")
+        except Exception:
+            # Fallback to jiwer if evaluate fails
+            try:
+                import jiwer
+                return jiwer.wer(ref_texts, hyp_texts)
+            except ImportError:
+                raise RuntimeError("Cannot load WER metric. Install 'jiwer' as fallback: pip install jiwer")
+    
+    return _wer_metric.compute(predictions=hyp_texts, references=ref_texts)
