@@ -42,7 +42,7 @@ train:
   num_workers: 4
   
   # Training settings
-  num_epochs: 20
+  num_epochs: 15
   total_steps: 10000
   warmup_steps: 200
   validation_interval: 500
