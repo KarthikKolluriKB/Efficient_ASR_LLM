@@ -5,6 +5,9 @@ import argparse
 from dotenv import load_dotenv
 load_dotenv()  # Load environment variables from .env file (including WANDB_API_KEY)
 
+# Fix CUDA memory fragmentation (prevents OOM on long training runs)
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import torch 
 from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
