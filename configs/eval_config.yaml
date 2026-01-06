@@ -1,72 +1,96 @@
+# =============================================================================
+# SLAM-ASR Evaluation Configuration
+# Evaluate trained model on test set - compute WER
+# =============================================================================
+# Usage: python eval.py --config configs/eval_config.yaml
+# =============================================================================
+
 model:
   model_name: ASRLLM
   file: models/model.py:ASRLLM
-  llm_model_name: llama3.2-3B   
-  llm_model: meta-llama/Llama-3.2-3B
+  
+  # LLM - must match training config
+  llm_model_name: qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
+  llm_dim: 2048
   llm_model_path: null
   llm_type: decoder_only
-  llm_dim: 3072
+  
+  # Whisper encoder - must match training config
   encoder_model_name: whisper-base
   encoder_model: base
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 512
+  
+  # Projector - must match training config
   projector: linear
-  projector_ds_rate: 4 # if OOM from long prefixes, consider 6-8
+  projector_ds_rate: 5
   modal: audio
   normalize: false
   encoder_type: finetune
 
-train:
-  model_name: ASRLLM
-  run_validation: true
-  batch_size: 8                   # micro-batch per GPU
-  batching_strategy: packing
-  context_length: 384               # balance speed/quality on 3B
-  gradient_accumulation_steps: 2    # effective batch ≈ 32
-  grad_clip: 1.0
-  num_epochs: 15                     # with early stopping on dev-clean
-  num_workers: 8
-  warmup_steps: 300                 # ~3% of ~8.9k total steps
-  total_steps: 12000                # ceiling; loop uses epochs
-  validation_interval: 1000         # validate each epoch via your loop
-  lr: 1.0e-4
-  weight_decay: 0.01
-  gamma: 0.85
-  seed: 42
-  use_fp16: false                   # prefer bf16 on A6000
-  mixed_precision: true
-  val_batch_size: 8                # larger no-grad batches speed up eval
+eval:
+  # Path to trained projector weights
+  projector_path: outputs/slam_asr_danish/projector_best_wer.pt
+  
+  # Evaluation settings
+  batch_size: 8
+  num_workers: 4
+  
+  # Generation settings
+  max_new_tokens: 256
+  num_beams: 1
+  temperature: 1.0
+  do_sample: false
+  
+  # Output
+  output_dir: outputs/slam_asr_danish/eval/
+  save_predictions: true
 
-  use_peft: false
-  output_dir: outputs_3b_enc_base_100h/
-  freeze_layers: false
-  num_freeze_layers: 0
-  quantization: false
-  one_gpu: true
-  save_model: true
-  use_fast_kernels: false           # set SDPA in code
-  freeze_llm: true                  # projector-only
+train:
+  # Minimal train section for compatibility
+  model_name: ASRLLM
+  batch_size: 8
+  val_batch_size: 8
+  num_workers: 4
+  output_dir: outputs/slam_asr_danish/
+  freeze_llm: true
   freeze_encoder: true
+  mixed_precision: true
+  one_gpu: true
 
 data:
   dataset: speech_dataset
-  file: datamodules/datasets.py:get_speech_dataset
-  test_data_path: data/test-clean.jsonl
+  file: datamodule/dataset.py:get_speech_dataset
+  
+  # Common Voice Danish paths
+  train_data_path: data/common_voice_da/train.jsonl
+  val_data_path: data/common_voice_da/validation.jsonl
+  test_data_path: data/common_voice_da/test.jsonl
+  
   train_split: train
   val_split: val
   test_split: test
+  
+  # Audio settings
+  input_type: mel
+  mel_size: 80
+  normalize: false
+  use_variable_length: true
+  max_audio_length: 30
+  fix_length_audio: -1
+  inference_mode: true
+  
   prompt: null
   data_path: null
   max_words: null
   max_mel: null
-  fix_length_audio: -1
-  inference_mode: false
-  input_type: mel
-  mel_size: 80
-  normalize: false
 
 log:
+  use_wandb: false
+  log_dir: ./logs
+  log_filename: eval.log
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: ASRLLM_EVALS
