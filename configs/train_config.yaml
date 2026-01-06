@@ -115,7 +115,7 @@ data:
 log:
   use_wandb: true
   wandb_dir: ./wandb
-  wandb_entity_name: SLAM_ASR_Danish
+  wandb_entity_name: null  # Uses your default wandb account
   wandb_project_name: SLAM_ASR_Danish
   wandb_exp_name: whisper_base_qwen_danish
   log_dir: ./logs
