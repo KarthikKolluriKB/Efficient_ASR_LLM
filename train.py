@@ -13,7 +13,7 @@ from utils.log_config import get_logger
 from utils.wand_config import init_wandb
 from models.model import model_builder
 from datamodule.dataset import get_speech_dataset
-from utils.metrics import decode_texts_from_outputs, compute_wer
+from utils.metrics import decode_texts_from_outputs, compute_wer, count_encoder_parameters
 from utils.train_utils import print_model_size, print_module_size, save_and_print_examples
 import sys
 
@@ -180,6 +180,32 @@ def main():
 
     logger.info(f"Model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters")
 
+    # Log encoder efficiency metrics
+    num_layers = getattr(cfg.model, 'encoder_num_layers', None)
+    encoder_params = count_encoder_parameters(model.encoder, num_layers=num_layers)
+    
+    # Build efficiency summary string for logging (ASCII only for Windows compatibility)
+    efficiency_summary = f"""
+{'='*60}
+ENCODER EFFICIENCY METRICS
+{'='*60}
+Model:              Whisper-{cfg.model.encoder_model}
+Layers Used:        {encoder_params['num_layers_used']} / {encoder_params['num_layers_total']}
+Layer Reduction:    {100 - (encoder_params['num_layers_used']/encoder_params['num_layers_total']*100):.1f}%
+{'-'*60}
+Conv Params:        {encoder_params['conv_params']:>12,} ({encoder_params['conv_params']/1e6:.2f}M)
+Pos Embedding:      {encoder_params['pos_embedding_params']:>12,} ({encoder_params['pos_embedding_params']/1e6:.2f}M)
+LayerNorm:          {encoder_params['ln_post_params']:>12,} ({encoder_params['ln_post_params']/1e6:.2f}M)
+Per Block:          {encoder_params['block_params_per_layer']:>12,} ({encoder_params['block_params_per_layer']/1e6:.2f}M)
+{'-'*60}
+Total Params:       {encoder_params['total_params']:>12,} ({encoder_params['total_params']/1e6:.2f}M)
+Used Params:        {encoder_params['used_params']:>12,} ({encoder_params['used_params']/1e6:.2f}M)
+Pruned Params:      {encoder_params['pruned_params']:>12,} ({encoder_params['pruned_params']/1e6:.2f}M)
+Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_params']*100):.1f}%
+{'='*60}
+"""
+    logger.info(efficiency_summary)
+
     # Dataset and DataLoader
     # FIXME: currently only support train dataset )
     split = cfg.data.get("train_split", cfg.data.get("test_split", "train"))
@@ -216,6 +242,8 @@ def main():
     # W&B init 
     run = None 
     if cfg.log.use_wandb:
+        import wandb
+        
         run = init_wandb(
             use_wand=True, 
             project=cfg.log.wandb_project_name,
@@ -224,6 +252,36 @@ def main():
             config=OmegaConf.to_container(cfg, resolve=True)
         )
         logger.info("Initialized W&B run")
+        
+        # Log efficiency metrics to W&B summary (for comparing runs in table view)
+        run.summary["efficiency/encoder_layers_used"] = encoder_params['num_layers_used']
+        run.summary["efficiency/encoder_layers_total"] = encoder_params['num_layers_total']
+        run.summary["efficiency/encoder_params_used_M"] = round(encoder_params['used_params'] / 1e6, 2)
+        run.summary["efficiency/encoder_params_pruned_M"] = round(encoder_params['pruned_params'] / 1e6, 2)
+        run.summary["efficiency/param_reduction_pct"] = round(encoder_params['pruned_params'] / encoder_params['total_params'] * 100, 1)
+        
+        # Log efficiency metrics as W&B Table (textual display in dashboard)
+        efficiency_table = wandb.Table(
+            columns=["Metric", "Value"],
+            data=[
+                ["Whisper Model", f"whisper-{cfg.model.encoder_model}"],
+                ["Encoder Layers", f"{encoder_params['num_layers_used']} / {encoder_params['num_layers_total']}"],
+                ["Layer Reduction", f"{100 - (encoder_params['num_layers_used']/encoder_params['num_layers_total']*100):.1f}%"],
+                ["─────────────", "─────────────"],
+                ["Total Encoder Params", f"{encoder_params['total_params']/1e6:.2f}M"],
+                ["Used Encoder Params", f"{encoder_params['used_params']/1e6:.2f}M"],
+                ["Pruned Encoder Params", f"{encoder_params['pruned_params']/1e6:.2f}M"],
+                ["Param Reduction", f"{encoder_params['pruned_params']/encoder_params['total_params']*100:.1f}%"],
+                ["─────────────", "─────────────"],
+                ["Conv Params", f"{encoder_params['conv_params']/1e6:.2f}M"],
+                ["Positional Embedding", f"{encoder_params['pos_embedding_params']/1e6:.2f}M"],
+                ["Params per Block", f"{encoder_params['block_params_per_layer']/1e6:.2f}M"],
+            ]
+        )
+        run.log({"efficiency/model_config": efficiency_table})
+        
+        # Also log as text artifact for easy reference
+        run.log({"efficiency/summary_text": wandb.Html(f"<pre>{efficiency_summary}</pre>")})
 
     # Mixed precision and scaler
     use_autocast = bool(cfg.train.mixed_precision and device == "cuda")

@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 # Internal imports
 from models.model import model_builder
 from datamodule.dataset import get_speech_dataset
-from utils.metrics import decode_texts_from_outputs
+from utils.metrics import decode_texts_from_outputs, count_encoder_parameters
 from utils.wand_config import init_wandb
 from utils.log_config import get_logger
 from utils.train_utils import save_and_print_examples
@@ -56,6 +56,49 @@ def run_eval(args):
         model = model.to(device)
         model.eval()
         logger.info(f"Model moved to device: {device}")
+        
+        # 4.5 Log efficiency metrics (encoder parameters)
+        num_layers = getattr(model_cfg, 'encoder_num_layers', None)
+        encoder_params = count_encoder_parameters(model.encoder, num_layers=num_layers)
+        
+        # Build efficiency summary string (ASCII only for Windows compatibility)
+        efficiency_summary = f"""
+{'='*60}
+ENCODER EFFICIENCY METRICS
+{'='*60}
+Model:              Whisper-{model_cfg.encoder_model}
+Layers Used:        {encoder_params['num_layers_used']} / {encoder_params['num_layers_total']}
+Layer Reduction:    {100 - (encoder_params['num_layers_used']/encoder_params['num_layers_total']*100):.1f}%
+{'-'*60}
+Total Params:       {encoder_params['total_params']:>12,} ({encoder_params['total_params']/1e6:.2f}M)
+Used Params:        {encoder_params['used_params']:>12,} ({encoder_params['used_params']/1e6:.2f}M)
+Pruned Params:      {encoder_params['pruned_params']:>12,} ({encoder_params['pruned_params']/1e6:.2f}M)
+Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_params']*100):.1f}%
+{'='*60}
+"""
+        logger.info(efficiency_summary)
+        
+        # Log to wandb if enabled (as table + summary)
+        if run is not None:
+            import wandb
+            
+            # Summary metrics for run comparison
+            run.summary["efficiency/encoder_layers_used"] = encoder_params['num_layers_used']
+            run.summary["efficiency/encoder_params_used_M"] = round(encoder_params['used_params'] / 1e6, 2)
+            run.summary["efficiency/param_reduction_pct"] = round(encoder_params['pruned_params'] / encoder_params['total_params'] * 100, 1)
+            
+            # Table for textual display
+            efficiency_table = wandb.Table(
+                columns=["Metric", "Value"],
+                data=[
+                    ["Whisper Model", f"whisper-{model_cfg.encoder_model}"],
+                    ["Encoder Layers", f"{encoder_params['num_layers_used']} / {encoder_params['num_layers_total']}"],
+                    ["Used Params", f"{encoder_params['used_params']/1e6:.2f}M"],
+                    ["Pruned Params", f"{encoder_params['pruned_params']/1e6:.2f}M"],
+                    ["Param Reduction", f"{encoder_params['pruned_params']/encoder_params['total_params']*100:.1f}%"],
+                ]
+            )
+            run.log({"efficiency/model_config": efficiency_table})
         
         # 5. Load Test Dataset
         test_dataset = get_speech_dataset(data_cfg, tokenizer, split=args.split)

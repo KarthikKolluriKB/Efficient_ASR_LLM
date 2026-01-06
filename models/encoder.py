@@ -49,8 +49,9 @@ class WhisperWrappedEncoder:
             x = self.ln_post(x)
             return x
         
-        # Load whisper model
-        encoder = whisper.load_model(name=model_config.encoder_model, device='cpu').encoder
+        # Load whisper model on GPU if available, else CPU
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        encoder = whisper.load_model(name=model_config.encoder_model, device=device).encoder
         
         # Store number of layers to use
         total_layers = len(encoder.blocks)
@@ -58,10 +59,10 @@ class WhisperWrappedEncoder:
             if num_layers < 1 or num_layers > total_layers:
                 raise ValueError(f"encoder_num_layers must be between 1 and {total_layers}, got {num_layers}")
             encoder._num_layers = num_layers
-            logger.info(f"Whisper encoder: using {num_layers}/{total_layers} layers (pruned top {total_layers - num_layers} layers)")
+            logger.info(f"Whisper encoder: using {num_layers}/{total_layers} layers (pruned top {total_layers - num_layers} layers) on {device}")
         else:
             encoder._num_layers = None
-            logger.info(f"Whisper encoder: using all {total_layers} layers")
+            logger.info(f"Whisper encoder: using all {total_layers} layers on {device}")
         
         encoder.extract_variable_length_features = types.MethodType(extract_variable_length_features, encoder)
         
