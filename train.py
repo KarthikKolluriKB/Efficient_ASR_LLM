@@ -2,6 +2,9 @@ import os
 import time 
 import argparse 
 
+from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from .env file (including WANDB_API_KEY)
+
 import torch 
 from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_

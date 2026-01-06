@@ -36,9 +36,9 @@ train:
   run_validation: true
   
   # Batch settings - adjust based on GPU memory
-  batch_size: 8
-  val_batch_size: 8
-  gradient_accumulation_steps: 2
+  batch_size: 16
+  val_batch_size: 16
+  gradient_accumulation_steps: 4
   num_workers: 4
   
   # Training settings
@@ -115,7 +115,7 @@ data:
 log:
   use_wandb: true
   wandb_dir: ./wandb
-  wandb_entity_name: null  # Set your wandb entity
+  wandb_entity_name: SLAM_ASR_Danish
   wandb_project_name: SLAM_ASR_Danish
   wandb_exp_name: whisper_base_qwen_danish
   log_dir: ./logs
