@@ -225,7 +225,7 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
         persistent_workers=True if cfg.train.num_workers > 0 else False
     )
 
-    logger.info(f"Train dataset: {len(train_ds)} samples, {len(train_dataloader)} batches")
+    logger.info(f"Train dataset: {len(train_ds)} samples, {len(train_dataloader)} batches (batch_size={cfg.train.batch_size})")
 
     # Validation dataloader 
     val_split = cfg.data.get("val_split", "dev")
@@ -241,20 +241,28 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
     )
 
     logger.info(f"Validation dataset: {len(vald_ds)} samples, {len(val_dataloader)} batches")
+    logger.info(f"Log interval: {cfg.log.log_interval} steps")  # Debug: verify log interval
 
     # W&B init 
     run = None 
     if cfg.log.use_wandb:
         import wandb
         
+        logger.info(f"Attempting to initialize W&B: project={cfg.log.wandb_project_name}, entity={cfg.log.wandb_entity_name}")
+        
         run = init_wandb(
             use_wand=True, 
             project=cfg.log.wandb_project_name,
             run_name=cfg.log.wandb_exp_name,
             tags=[cfg.model.llm_model_name, cfg.model.encoder_model_name, cfg.model.projector, "projector-only"],
+            entity=cfg.log.wandb_entity_name,
             config=OmegaConf.to_container(cfg, resolve=True)
         )
-        logger.info("Initialized W&B run")
+        
+        if run is not None:
+            logger.info(f"Initialized W&B run: {run.url}")
+        else:
+            logger.warning("W&B initialization failed - run is None")
         
         # Log efficiency metrics to W&B summary (for comparing runs in table view)
         run.summary["efficiency/encoder_layers_used"] = encoder_params['num_layers_used']
@@ -457,17 +465,21 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
 
 
 if __name__ == "__main__":
-
-    # Debugging flag
-    DEBUG = True
-
+    # =========================================================================
+    # DEBUG MODE TOGGLE
+    # Set to True for local debugging with VS Code (uses test_config.yaml)
+    # Set to False for production training (uses command line --config)
+    # =========================================================================
+    DEBUG = False
+    # =========================================================================
+    
     if DEBUG:
-        sys.argv = [
-            'train.py',
-            '--config', 'configs/test_config.yaml'
-        ]
-
-        main()
-    else:
-        main()
+        print("=" * 60)
+        print("🔧 RUNNING IN DEBUG MODE")
+        print("   Config: configs/test_config.yaml")
+        print("   Set DEBUG = False for production training")
+        print("=" * 60)
+        sys.argv = ['train.py', '--config', 'configs/test_config.yaml']
+    
+    main()
 
