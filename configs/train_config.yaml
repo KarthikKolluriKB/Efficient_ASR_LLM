@@ -36,9 +36,10 @@ train:
   run_validation: true
   
   # Batch settings - adjust based on GPU memory
-  batch_size: 8
-  val_batch_size: 8
-  gradient_accumulation_steps: 4
+  # Reduced from 8 to 4 to prevent OOM on variable-length audio
+  batch_size: 4
+  val_batch_size: 4
+  gradient_accumulation_steps: 8  # Keeps effective batch size = 32
   num_workers: 4
   
   # Training settings
@@ -103,7 +104,7 @@ data:
   mel_size: 80
   normalize: false
   use_variable_length: true
-  max_audio_length: 30
+  max_audio_length: 20  # Reduced from 30s to prevent OOM spikes
   fix_length_audio: -1
   inference_mode: false
   

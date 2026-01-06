@@ -393,6 +393,10 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
                     clip_grad_norm_(projector_params, cfg.train.grad_clip)
                 optimizer.step()
 
+            # Periodic GPU cache cleanup to prevent memory fragmentation
+            if global_step % 50 == 0:
+                torch.cuda.empty_cache()
+
             if global_step % cfg.log.log_interval == 0: 
                 elapsed = time.time() - start_time
                 lr = optimizer.param_groups[0]["lr"]
