@@ -120,4 +120,4 @@ log:
   wandb_exp_name: whisper_base_qwen_danish
   log_dir: ./logs
   log_filename: train.log
-  log_interval: 50
+  log_interval: 100
