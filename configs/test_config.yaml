@@ -107,19 +107,10 @@ scheduler:
 
 log:
   use_wandb: false
-  log_dir: ./logs
-  log_filename: test.log
-  log_interval: 10
-  input_type: mel
-  mel_size: 80
-  normalize: false
-
-log:
-  use_wandb: true
   wandb_dir: ./wandb
-  wandb_entity_name: ASRLLM_test
-  wandb_project_name: ASRLLM_test
-  wandb_exp_name: exp_smoke_llama3.2-1B_linear_proj_whisper-base
+  wandb_entity_name: null
+  wandb_project_name: null
+  wandb_exp_name: null
   log_dir: ./logs
-  log_filename: train_smoke_1b.log
-  log_interval: 1
+  log_filename: test_debug.log
+  log_interval: 10

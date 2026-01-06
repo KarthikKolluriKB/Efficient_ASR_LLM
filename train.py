@@ -214,8 +214,9 @@ def main():
     use_autocast = bool(cfg.train.mixed_precision and device == "cuda")
     amp_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
 
-    # Grad Scaler for mixed precision
-    scaler = torch.amp.GradScaler(enabled=bool(cfg.train.use_fp16))
+    # Grad Scaler for mixed precision (only needed for float16, not bfloat16)
+    use_scaler = bool(cfg.train.use_fp16) and amp_dtype == torch.float16
+    scaler = torch.amp.GradScaler(enabled=use_scaler)
 
     # Match Whisper encoder parameters dtype (prevent type mismatch)
     enc_dtype = next(model.encoder.parameters()).dtype
@@ -372,7 +373,7 @@ def main():
 if __name__ == "__main__":
 
     # Debugging flag
-    DEBUG = False
+    DEBUG = True
 
     if DEBUG:
         sys.argv = [
