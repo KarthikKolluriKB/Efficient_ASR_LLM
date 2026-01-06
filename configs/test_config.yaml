@@ -105,6 +105,12 @@ scheduler:
   total_training_steps: 50
   warmup_steps: 5
 
+early_stopping:
+  monitor: val/loss
+  mode: min
+  patience: 2
+  min_delta: 0.001
+
 log:
   use_wandb: false
   wandb_dir: ./wandb

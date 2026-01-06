@@ -256,7 +256,7 @@ class ASRLLM(nn.Module):
                 acc = compute_accuracy(preds.detach()[:, :-1], labels.detach()[:, 1:], ignore_label=-100)
                 metrics["acc"] = float(acc.item())
 
-                # Compute WER
+                # Compute WER (batch-level average)
                 if hasattr(model_outputs, "logits"):
                     # First decode the texts using decode_texts_from_outputs
                     hyp_texts, ref_texts = decode_texts_from_outputs(

@@ -17,8 +17,30 @@ from utils.metrics import decode_texts_from_outputs, compute_wer
 from utils.train_utils import print_model_size, print_module_size, save_and_print_examples
 import sys
 
-#from torchtnt.utils.early_stop_checker import EarlyStopChecker
-#from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+class EarlyStopChecker:
+    """Simple early stopping checker."""
+    def __init__(self, mode="min", patience=5, min_delta=0.001):
+        self.mode = mode
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_value = float("inf") if mode == "min" else float("-inf")
+        self.counter = 0
+        
+    def check(self, value):
+        """Returns True if training should stop."""
+        if self.mode == "min":
+            improved = value < (self.best_value - self.min_delta)
+        else:
+            improved = value > (self.best_value + self.min_delta)
+            
+        if improved:
+            self.best_value = value
+            self.counter = 0
+            return False
+        else:
+            self.counter += 1
+            return self.counter >= self.patience
 
 def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     """Evaluate the model on the given dataloader.
@@ -107,13 +129,6 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     
     return val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts
 
-# Early Stopping 
-# early_stop = EarlyStopChecker(
-#     mode="min",
-#     patience=2,
-#     min_delta=0.001, 
-#     threshold_mode="abs"
-# )
 
 def main(): 
     """
@@ -221,10 +236,21 @@ def main():
     # Match Whisper encoder parameters dtype (prevent type mismatch)
     enc_dtype = next(model.encoder.parameters()).dtype
 
+    # Early stopping from config
+    early_stop = None
+    if hasattr(cfg, 'early_stopping') and cfg.early_stopping is not None:
+        early_stop = EarlyStopChecker(
+            mode=cfg.early_stopping.get('mode', 'min'),
+            patience=cfg.early_stopping.get('patience', 5),
+            min_delta=cfg.early_stopping.get('min_delta', 0.001)
+        )
+        logger.info(f"Early stopping enabled: patience={early_stop.patience}, min_delta={early_stop.min_delta}")
+
     # Training loop
     global_step = 0
     best_val_loss = float("inf")
     best_val_wer = float("inf")
+    best_val_path = None
     start_time = time.time()
     model.train()
 
@@ -269,18 +295,13 @@ def main():
                 loss = outputs.loss
 
             # Accuracy for logging
-            if metrics is not None and "acc" in metrics:
-                acc = metrics["acc"]
-
-            # Compute WER per batch 
-            hyp_texts, ref_texts = decode_texts_from_outputs(
-                logits=outputs.logits,
-                labels=labels,
-                tokenizer=tokenizer,
-                ignore_label=-100
-            )
-
-            batch_wer = compute_wer(hyp_texts, ref_texts)
+            acc = 0.0
+            batch_wer = 0.0
+            if metrics is not None:
+                if "acc" in metrics:
+                    acc = metrics["acc"]
+                if "wer" in metrics:
+                    batch_wer = metrics["wer"]
 
             # Word-level accuracy
             word_acc = 1.0 - batch_wer if batch_wer >= 0.0 else 0.0
@@ -350,10 +371,13 @@ def main():
             save_projector(model, best_val_path, global_step)
             logger.info(f"New best model saved at step {global_step} to {best_val_path} with val_wer {best_val_wer:.4f}")
 
-        # early stopping 
-        # if early_stop.check(val_loss):
-        #     logger.info(f"Early stopping at epoch: {epoch} (patience={early_stop.patience})")
-        #     break
+        # Early stopping check
+        if early_stop is not None:
+            # Use val_loss or val_wer based on config monitor
+            monitor_value = val_loss if cfg.early_stopping.get('monitor', 'val/loss') == 'val/loss' else val_wer_score
+            if early_stop.check(monitor_value):
+                logger.info(f"Early stopping triggered at epoch {epoch} (patience={early_stop.patience})")
+                break
 
     # Final model checkpoint (for reference)
     final_path = os.path.join(cfg.train.output_dir, "projector_final.pt")
@@ -364,7 +388,8 @@ def main():
     logger.info("Training completed.....")
     logger.info("Training Time: {:.2f} minutes".format((time.time() - start_time) / 60))
     logger.info(f"Best validation wer: {best_val_wer:.4f}")
-    logger.info(f"Final projector model saved to: {best_val_path}")
+    if best_val_path:
+        logger.info(f"Best projector model saved to: {best_val_path}")
 
     if run is not None: 
         run.finish()
