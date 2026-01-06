@@ -22,6 +22,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 512
+  encoder_num_layers: null  # Number of encoder layers (null = all 6, must match training)
   
   # Projector - must match training config
   projector: linear

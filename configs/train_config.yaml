@@ -22,6 +22,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 512
+  encoder_num_layers: null  # Number of encoder layers to use (null = all 6, or 1-6)
   
   # Projector: maps encoder dim (512) -> LLM dim (2048)
   projector: linear
