@@ -42,7 +42,9 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
         self.prompt = None
         self.mel_size = getattr(dataset_config, 'mel_size', 80)  # 80 for whisper base/small/medium
         
-        self.prompt_template = "USER: {}\n ASSISTANT:"
+        # Simple prompt without chat format - works better for ASR
+        # Avoid USER/ASSISTANT format that can conflict with LLM's chat template
+        self.prompt_template = "{}\n"
         self.answer_template = "{}"
         
         self.fix_length_audio = getattr(dataset_config, 'fix_length_audio', -1)
@@ -54,10 +56,15 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
         self.use_variable_length = getattr(dataset_config, 'use_variable_length', True)
         self.max_audio_length = getattr(dataset_config, 'max_audio_length', 30)  # seconds
         
+        # Max target text length - filter out corrupted samples with TSV data in target
+        # For 20s audio at ~150 words/min = ~50 words = ~300 chars max reasonable
+        self.max_target_chars = getattr(dataset_config, 'max_target_chars', 500)
+        
         assert self.input_type in ["raw", "mel"], "input_type must be one of [raw, mel]" 
 
         # Load data from JSONL
         self.data_list = []
+        skipped = 0
         if split == "train":
             data_path = dataset_config.train_data_path
         elif split == "test":
@@ -69,8 +76,15 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
         with open(data_path, encoding='utf-8') as fin:
             for line in fin:
                 data_dict = json.loads(line.strip())
+                # Filter out corrupted samples (TSV data in target field)
+                target_len = len(data_dict.get('target', ''))
+                if target_len > self.max_target_chars:
+                    skipped += 1
+                    continue
                 self.data_list.append(data_dict)
         
+        if skipped > 0:
+            print(f"[Dataset] WARNING: Skipped {skipped} samples with target > {self.max_target_chars} chars (corrupted data)")
         print(f"[Dataset] Loaded {len(self.data_list)} samples for {split}")
 
     def get_source_len(self, data_dict):
@@ -135,7 +149,7 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
         # Prompt handling
         prompt = self.prompt
         if prompt is None:
-            prompt = "Transcribe speech to text. Output the transcription directly without redundant content. Ensure that the output is not duplicated. "
+            prompt = "Transcribe speech to text."
         prompt = self.prompt_template.format(prompt)
         prompt_ids = self.tokenizer.encode(prompt)
         prompt_length = len(prompt_ids)
@@ -241,11 +255,32 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
         """Collate samples into a batch."""
         assert samples is not None 
         
+        # Maximum sequence length to prevent OOM (vocab=152k needs ~0.3GB per 1000 tokens per batch)
+        MAX_SEQ_LENGTH = 512  # Safety limit
+        
         input_prompt_lengths = [s["audio_length"] + s['prompt_length'] for s in samples]
         input_answer_lengths = [len(s["input_ids"]) - s["audio_length"] - s['prompt_length'] for s in samples]
 
         input_prompt_max_length = max(input_prompt_lengths)
         input_answer_max_length = max(input_answer_lengths)
+        
+        # DEBUG: Check for unexpectedly large sequences
+        total_max_len = input_prompt_max_length + input_answer_max_length
+        if total_max_len > 500:
+            print(f"\n[DEBUG COLLATOR] WARNING: Large sequence detected!")
+            print(f"[DEBUG COLLATOR] input_prompt_max_length: {input_prompt_max_length}")
+            print(f"[DEBUG COLLATOR] input_answer_max_length: {input_answer_max_length}")
+            print(f"[DEBUG COLLATOR] audio_lengths: {[s['audio_length'] for s in samples]}")
+            print(f"[DEBUG COLLATOR] prompt_lengths: {[s['prompt_length'] for s in samples]}")
+            print(f"[DEBUG COLLATOR] input_ids_lengths: {[len(s['input_ids']) for s in samples]}")
+        
+        # Truncate to prevent OOM
+        if total_max_len > MAX_SEQ_LENGTH:
+            print(f"[DEBUG COLLATOR] Truncating from {total_max_len} to {MAX_SEQ_LENGTH}")
+            # Proportionally reduce both parts
+            scale = MAX_SEQ_LENGTH / total_max_len
+            input_prompt_max_length = int(input_prompt_max_length * scale)
+            input_answer_max_length = MAX_SEQ_LENGTH - input_prompt_max_length
         
         input_ids = torch.stack([
             self.padding(
@@ -272,6 +307,13 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
             audio_mel_post_mask = None
         elif self.input_type == "mel":
             audio_mel_max_length = max([s['audio_mel'].shape[0] for s in samples])
+            
+            # DEBUG: Check audio_mel sizes
+            if audio_mel_max_length > 2000:
+                print(f"\n[DEBUG COLLATOR] WARNING: Large audio_mel detected!")
+                print(f"[DEBUG COLLATOR] audio_mel_max_length: {audio_mel_max_length}")
+                print(f"[DEBUG COLLATOR] audio_mel shapes: {[s['audio_mel'].shape for s in samples]}")
+            
             audio_mel = torch.stack([self.pad(s['audio_mel'], audio_mel_max_length, 0)
                                   for s in samples])
             audio_mel_post_mask = torch.zeros(len(samples), (audio_mel_max_length + 1) // 2)

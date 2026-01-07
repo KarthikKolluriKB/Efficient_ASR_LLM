@@ -2,14 +2,29 @@ import torch
 import torch.nn as nn
 
 class EncoderProjectorConcat(nn.Module):
+    """
+    Linear projector with concatenation-based downsampling.
+    
+    Input: [B, T, encoder_dim]
+    - Concatenates k consecutive frames: [B, T//k, encoder_dim*k]
+    - Projects to LLM dimension: [B, T//k, llm_dim]
+    
+    For small datasets (<10K samples), use hidden_dim=512 to reduce overfitting.
+    For large datasets (>100K samples), use hidden_dim=2048.
+    """
     def __init__(self, config):
         super().__init__()
         self.k = config.projector_ds_rate
         self.encoder_dim = config.encoder_dim
         self.llm_dim = config.llm_dim
-        self.linear1 = nn.Linear(self.encoder_dim * self.k, 2048)
+        
+        # Use smaller hidden dim for small datasets to prevent overfitting
+        # Default to 2048 for backward compatibility
+        self.hidden_dim = getattr(config, 'projector_hidden_dim', 2048)
+        
+        self.linear1 = nn.Linear(self.encoder_dim * self.k, self.hidden_dim)
         self.relu = nn.ReLU()
-        self.linear2 = nn.Linear(2048, config.llm_dim)
+        self.linear2 = nn.Linear(self.hidden_dim, config.llm_dim)
 
     def forward(self, x):
         batch_size, seq_len, dim = x.size()

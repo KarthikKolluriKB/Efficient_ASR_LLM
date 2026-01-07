@@ -27,6 +27,9 @@ model:
   # Projector: maps encoder dim (512) -> LLM dim (2048)
   projector: linear
   projector_ds_rate: 5
+  # Smaller hidden dim to prevent overfitting with small dataset (3.5K samples)
+  # With 512 hidden: ~2.6M params vs 9.4M with 2048 hidden
+  projector_hidden_dim: 512
   modal: audio
   normalize: false
   encoder_type: finetune
@@ -36,20 +39,26 @@ train:
   run_validation: true
   
   # Batch settings - adjust based on GPU memory
-  # For 48GB GPU with Qwen2.5-3B, batch_size=8 works after memory leak fixes
-  batch_size: 8
-  val_batch_size: 1  # Must be 1 - logits tensor is ~6GB per sample with long audio!
+  # For 48GB GPU with Qwen2.5-3B, these settings work well
+  batch_size: 8  # Smaller batch for more updates per epoch
+  val_batch_size: 4  # Use 1 for generation-based eval (uses more memory than forward pass)
   gradient_accumulation_steps: 4  # Keeps effective batch size = 32
   num_workers: 4
-  max_eval_batches: 500  # Limit eval to 500 samples for faster validation (null = use all)
+  max_eval_batches: 500  # Limit eval batches for faster validation during training
+  max_new_tokens: 128  # Max tokens to generate during eval
   
-  # Training settings
-  num_epochs: 15
-  total_steps: 10000
-  warmup_steps: 200
-  validation_interval: 500
+  # Generation parameters for evaluation
+  repetition_penalty: 1.2  # Prevent repetitive outputs like "Human Human Human"
   
-  # Optimizer
+  # Training settings - MANY more epochs for projector-only training
+  # With frozen LLM, projector needs 50-100 epochs to learn audio-text mapping
+  num_epochs: 50
+  total_steps: 100000
+  warmup_steps: 200  # ~2 epochs warmup (112 steps/epoch)
+  validation_interval: 112  # Validate every epoch
+  
+  # Optimizer - lower LR for more stable projector training
+  # Start with 1e-4 and let scheduler decay it
   lr: 1.0e-4
   weight_decay: 0.01
   grad_clip: 1.0
@@ -82,10 +91,10 @@ scheduler:
   warmup_steps: 200
 
 early_stopping: 
-  monitor: val/loss
+  monitor: val/wer  # Monitor WER instead of loss (lower is better)
   mode: min 
-  patience: 5
-  min_delta: 0.001
+  patience: 15  # 15 epochs without improvement
+  min_delta: 0.005  # 0.5% WER improvement required
 
 data:
   dataset: speech_dataset

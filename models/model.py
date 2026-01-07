@@ -31,10 +31,10 @@ def model_builder(train_config, model_config, **kwargs):
     # 3. llm 
     llm = setup_llm(train_config, model_config, **kwargs)
 
-    # FIXME: temporarily force dtype to bfloat16 for projector to match Whisper encoder output dtype
-    # 4. projector 
-    projector = setup_projector(train_config, model_config, **kwargs).to(torch.bfloat16)
-    #encoder_projector = setup_encoder_projector(train_config, model_config, **kwargs) # fp32
+    # 4. projector - Keep in FP32 for stable training
+    # The autocast in train.py will handle mixed precision during forward/backward
+    # Optimizer will maintain FP32 weights for precise gradient accumulation
+    projector = setup_projector(train_config, model_config, **kwargs)  # FP32
 
     # 5. model
     model = ASRLLM(
@@ -195,14 +195,22 @@ class ASRLLM(nn.Module):
         # 1. Whisper encode audio -> [B, n_mels, T] -> permute -> [B, T, n_mels] for var-length 
         with context:
             encoder_outputs = self.encoder.extract_variable_length_features(audio_mel.permute(0, 2, 1)) # bs*seq*dim
+        
+        # DEBUG: Print shapes to diagnose OOM (always print first batch of each mode)
+        debug_key = f"_debug_{labels is not None}"  # Different key for train vs eval
+        if not hasattr(self, debug_key):
+            mode = "TRAIN" if labels is not None else "EVAL"
+            print(f"\n[DEBUG MODEL {mode}] audio_mel input shape: {audio_mel.shape}")
+            print(f"[DEBUG MODEL {mode}] encoder_outputs shape: {encoder_outputs.shape}")
+            setattr(self, debug_key, True)
 
         if audio_mel_post_mask is None:
             audio_mel_post_mask = torch.ones(encoder_outputs.size()[:-1], dtype=torch.long, device=encoder_outputs.device) # [B, T_enc]
 
-        projector_dtype = next(self.projector.parameters()).dtype
-
-        if encoder_outputs.dtype != projector_dtype:
-            encoder_outputs = encoder_outputs.to(projector_dtype)
+        # Note: With autocast enabled in train.py, PyTorch will automatically handle
+        # precision for matmul operations. Projector weights are FP32 for stable
+        # optimizer updates, but autocast may run matmuls in lower precision.
+        # This is the correct mixed precision pattern.
 
         # 2. Projector (Project to LLM embedding space)
         if self.model_config.projector == "q-former":
@@ -212,6 +220,13 @@ class ASRLLM(nn.Module):
         elif self.model_config.projector in ["linear", "cov1d-linear"]:
             # linear or conv1d + linear
             encoder_outputs = self.projector(encoder_outputs)  # [B, T_enc_proj, D_llm]
+        
+        # DEBUG: Print projected shape
+        debug_key2 = f"_debug_proj_{labels is not None}"
+        if not hasattr(self, debug_key2):
+            mode = "TRAIN" if labels is not None else "EVAL"
+            print(f"[DEBUG MODEL {mode}] encoder_outputs after projector: {encoder_outputs.shape}")
+            setattr(self, debug_key2, True)
 
 
         # 3. Token embedding 
@@ -239,6 +254,16 @@ class ASRLLM(nn.Module):
                 ] = encoder_outputs[i][:modality_lengths[i]]
             
             inputs_embeds = encoder_outs_pad + inputs_embeds * (~modality_mask[:, :, None])
+        
+        # DEBUG: Print final inputs_embeds shape going into LLM
+        debug_key3 = f"_debug_embed_{labels is not None}"
+        if not hasattr(self, debug_key3):
+            mode = "TRAIN" if labels is not None else "EVAL"
+            print(f"[DEBUG MODEL {mode}] input_ids shape: {input_ids.shape if input_ids is not None else 'None'}")
+            print(f"[DEBUG MODEL {mode}] inputs_embeds shape to LLM: {inputs_embeds.shape}")
+            expected_mem = inputs_embeds.shape[0] * inputs_embeds.shape[1] * 151936 * 2 / 1e9
+            print(f"[DEBUG MODEL {mode}] Expected logits memory: {expected_mem:.2f} GB (bfloat16)")
+            setattr(self, debug_key3, True)
 
         # Fast path for generation setup
         if kwargs.get("inference_mode", False): 

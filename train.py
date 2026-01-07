@@ -61,7 +61,7 @@ class EarlyStopChecker:
             return self.counter >= self.patience
 
 def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
-    """Evaluate the model on the given dataloader.
+    """Evaluate the model on the given dataloader using actual generation.
     
     Args:
         model: The model to evaluate
@@ -92,6 +92,9 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     # Limit validation to first N batches for faster evaluation (optional)
     max_eval_batches = cfg.train.get("max_eval_batches", None)  # None = use all
     total_batches = len(dataloader)
+    
+    # Generation config for ASR
+    max_new_tokens = cfg.train.get("max_new_tokens", 128)  # Max output tokens
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(dataloader):
@@ -110,67 +113,117 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
             audio_mel = batch["audio_mel"].to(device).to(enc_dtype)
             modality_mask = batch['modality_mask'].to(device)
             
-
+            # Get reference texts from labels
+            labels_cpu = labels.detach().cpu()
+            ref_texts = []
+            for label in labels_cpu:
+                valid_tokens = label[label != -100]
+                if len(valid_tokens) > 0:
+                    ref_text = tokenizer.decode(valid_tokens, skip_special_tokens=True).strip()
+                    ref_texts.append(ref_text)
+            
+            # === STEP 1: Compute loss and accuracy with forward pass ===
             if use_autocast:
-                with torch.autocast(device_type=device, dtype=amp_dtype): 
-                    # Forward pass WITHOUT labels to skip loss computation (saves ~50GB memory!)
-                    # The LLM's loss function converts logits to float32 which causes OOM
-                    outputs, metrics = model(
+                with torch.autocast(device_type=device, dtype=amp_dtype):
+                    model_outputs, metrics = model.forward(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
-                        labels=None,  # Don't compute loss in LLM - too memory intensive
+                        labels=labels,
                         audio_mel=audio_mel,
-                        modality_mask=modality_mask
+                        modality_mask=modality_mask,
+                        inference_mode=False
                     )
-                    
-            else: 
-                # Forward pass WITHOUT labels
-                outputs, metrics = model(
+            else:
+                model_outputs, metrics = model.forward(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
-                    labels=None,  # Don't compute loss in LLM
+                    labels=labels,
                     audio_mel=audio_mel,
-                    modality_mask=modality_mask
+                    modality_mask=modality_mask,
+                    inference_mode=False
                 )
             
-            # Skip loss accumulation (we're not computing it to save memory)
-            # total_loss += outputs.loss.item()  # No loss when labels=None
-            n_batches += 1
-
-            # Compute accuracy manually on CPU to save memory
-            # Move logits to CPU immediately to free GPU memory
-            logits_cpu = outputs.logits.detach().cpu()
-            labels_cpu = labels.detach().cpu()
+            # Accumulate loss and accuracy
+            if model_outputs.loss is not None:
+                total_loss += model_outputs.loss.item()
+            if "acc" in metrics:
+                all_accuracies.append(metrics["acc"])
             
-            # Compute token-level accuracy
-            preds = torch.argmax(logits_cpu, dim=-1)
-            mask = labels_cpu != -100
-            if mask.sum() > 0:
-                acc = (preds[mask] == labels_cpu[mask]).float().mean().item()
-                all_accuracies.append(acc)
-
-            # Get decoded texts from logits for WER evaluation
-            hyp_texts, ref_texts = decode_texts_from_outputs(
-                logits=logits_cpu,
-                labels=labels_cpu,
-                tokenizer=tokenizer,
-                ignore_label=-100
-            )
+            # Free the model outputs before generation
+            del model_outputs
+            
+            # === STEP 2: Generate for WER computation ===
+            if use_autocast:
+                with torch.autocast(device_type=device, dtype=amp_dtype):
+                    # Get input embeddings for generation
+                    outputs_embeds, gen_attention_mask = model.forward(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=None,
+                        audio_mel=audio_mel,
+                        modality_mask=modality_mask,
+                        inference_mode=True
+                    )
+                    
+                    # Generate using the LLM
+                    generated_ids = model.llm.generate(
+                        inputs_embeds=outputs_embeds,
+                        attention_mask=gen_attention_mask,
+                        max_new_tokens=max_new_tokens,
+                        num_beams=1,  # Greedy for speed
+                        do_sample=False,
+                        pad_token_id=tokenizer.pad_token_id,
+                        eos_token_id=tokenizer.eos_token_id,
+                        use_cache=False,  # Avoid KV cache memory issues
+                    )
+            else:
+                # Get input embeddings for generation
+                outputs_embeds, gen_attention_mask = model.forward(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=None,
+                    audio_mel=audio_mel,
+                    modality_mask=modality_mask,
+                    inference_mode=True
+                )
+                
+                # Generate using the LLM
+                generated_ids = model.llm.generate(
+                    inputs_embeds=outputs_embeds,
+                    attention_mask=gen_attention_mask,
+                    max_new_tokens=max_new_tokens,
+                    num_beams=1,
+                    do_sample=False,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                    use_cache=False,
+                )
+            
+            # Decode generated texts
+            hyp_texts = []
+            for gen_ids in generated_ids:
+                hyp_text = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+                hyp_texts.append(hyp_text)
+            
+            n_batches += 1
             
             # Compute WER for this batch
             if hyp_texts and ref_texts:
-                batch_wer = compute_wer(hyp_texts, ref_texts)
-                all_wer_scores.append(batch_wer)
-            
-            # Accumulate texts
-            all_hyp_texts.extend(hyp_texts)
-            all_ref_texts.extend(ref_texts)
+                # Match lengths (in case of batch size mismatch)
+                min_len = min(len(hyp_texts), len(ref_texts))
+                batch_hyp = hyp_texts[:min_len]
+                batch_ref = ref_texts[:min_len]
+                
+                if batch_hyp and batch_ref:
+                    batch_wer = compute_wer(batch_hyp, batch_ref)
+                    all_wer_scores.append(batch_wer)
+                    all_hyp_texts.extend(batch_hyp)
+                    all_ref_texts.extend(batch_ref)
             
             # CRITICAL: Clean up GPU memory after each eval batch
             del input_ids, attention_mask, labels, audio_mel, modality_mask
-            del outputs, logits_cpu, labels_cpu, preds
-            if metrics is not None:
-                del metrics
+            del outputs_embeds, gen_attention_mask, generated_ids
+            del labels_cpu
             
             # Clean GPU cache after EVERY batch during evaluation
             gc.collect()
@@ -185,11 +238,10 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
         model.llm.gradient_checkpointing_enable()
     
     # Calculate final metrics
-    # Note: val_loss is 0.0 because we skip loss computation during eval to save memory
-    val_loss = 0.0  # Not computed to avoid OOM (loss function converts to float32)
+    val_loss = total_loss / max(n_batches, 1)
     val_acc = sum(all_accuracies) / max(len(all_accuracies), 1) if all_accuracies else 0.0
-    val_wer_score = sum(all_wer_scores) / max(len(all_wer_scores), 1) if all_wer_scores else 0.0
-    val_word_acc = 1.0 - val_wer_score if val_wer_score >= 0.0 else 0.0
+    val_wer_score = sum(all_wer_scores) / max(len(all_wer_scores), 1) if all_wer_scores else 1.0
+    val_word_acc = 1.0 - val_wer_score if val_wer_score <= 1.0 else 0.0
     
     # Reset model to training mode
     model.train()
@@ -400,6 +452,12 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
         for step, batch in enumerate(train_dataloader):
             # Incrementing global step 
             global_step += 1
+
+            # DEBUG: Print shapes on first step
+            if global_step == 1:
+                print(f"\n[DEBUG TRAIN] input_ids shape: {batch['input_ids'].shape}")
+                print(f"[DEBUG TRAIN] audio_mel shape: {batch['audio_mel'].shape}")
+                print(f"[DEBUG TRAIN] attention_mask shape: {batch['attention_mask'].shape}")
 
             # Move batch to device
             input_ids = batch["input_ids"].to(device, non_blocking=True)
