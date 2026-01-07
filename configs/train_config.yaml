@@ -27,9 +27,9 @@ model:
   # Projector: maps encoder dim (512) -> LLM dim (2048)
   projector: linear
   projector_ds_rate: 5
-  # Smaller hidden dim to prevent overfitting with small dataset (3.5K samples)
-  # With 512 hidden: ~2.6M params vs 9.4M with 2048 hidden
-  projector_hidden_dim: 512
+  # Medium hidden dim - balanced capacity vs overfitting risk
+  # With 1024 hidden: ~5.2M params (between 512=2.6M and 2048=9.4M)
+  projector_hidden_dim: 1024
   modal: audio
   normalize: false
   encoder_type: finetune
@@ -41,10 +41,10 @@ train:
   # Batch settings - smaller batch for small dataset (3.5K samples)
   # Smaller batch = more updates + gradient noise (natural regularization)
   batch_size: 16  # Effective batch = 16 * 2 = 32, steps/epoch = 112
-  val_batch_size: 32  # Large for fast validation (no gradients = less memory)
+  val_batch_size: 64  # Large for fast validation (no gradients = less memory)
   gradient_accumulation_steps: 2  # Total effective batch = 32
   num_workers: 8  # Increased for faster data loading
-  max_eval_batches: 100  # Limit eval batches (2510/64 = 40 batches, well under limit)
+  max_eval_batches: 100  # Limit eval batches (2510/64 = ~40 batches)
   max_new_tokens: 128  # Max tokens to generate during eval
   
   # Generation parameters for evaluation
