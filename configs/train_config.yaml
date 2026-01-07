@@ -38,7 +38,7 @@ train:
   # Batch settings - adjust based on GPU memory
   # For 48GB GPU with Qwen2.5-3B, batch_size=8 works after memory leak fixes
   batch_size: 8
-  val_batch_size: 8
+  val_batch_size: 4  # Smaller for eval (logits need ~400MB per sample with 150k vocab)
   gradient_accumulation_steps: 4  # Keeps effective batch size = 32
   num_workers: 4
   

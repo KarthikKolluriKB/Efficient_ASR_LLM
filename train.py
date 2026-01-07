@@ -74,6 +74,13 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
                hypothesis texts, reference texts)
     """
     model.eval()
+    
+    # Temporarily disable gradient checkpointing during eval (saves memory)
+    grad_ckpt_was_enabled = False
+    if hasattr(model.llm, 'is_gradient_checkpointing') and model.llm.is_gradient_checkpointing:
+        grad_ckpt_was_enabled = True
+        model.llm.gradient_checkpointing_disable()
+    
     total_loss, n_batches = 0.0, 0
     all_accuracies = []
     all_wer_scores = []
@@ -139,15 +146,20 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
             
             # CRITICAL: Clean up GPU memory after each eval batch
             del input_ids, attention_mask, labels, audio_mel, modality_mask
-            del outputs, metrics
+            del outputs, metrics, hyp_texts, ref_texts
             
-            # Clean GPU cache periodically during evaluation
-            if batch_idx % 5 == 0:
-                torch.cuda.empty_cache()
+            # Clean GPU cache after EVERY batch during evaluation (not every 5)
+            # This is critical because logits are huge (~1GB per sample with 150k vocab)
+            gc.collect()
+            torch.cuda.empty_cache()
 
     # Final cleanup after evaluation
     gc.collect()
     torch.cuda.empty_cache()
+    
+    # Re-enable gradient checkpointing if it was enabled before
+    if grad_ckpt_was_enabled:
+        model.llm.gradient_checkpointing_enable()
     
     # Calculate final metrics
     val_loss = total_loss / max(n_batches, 1)
