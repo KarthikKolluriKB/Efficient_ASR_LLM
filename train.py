@@ -165,7 +165,8 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
                         inference_mode=True
                     )
                     
-                    # Generate using the LLM
+                    # Generate using the LLM with repetition penalty
+                    repetition_penalty = cfg.train.get("repetition_penalty", 1.2)
                     generated_ids = model.llm.generate(
                         inputs_embeds=outputs_embeds,
                         attention_mask=gen_attention_mask,
@@ -175,6 +176,8 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
                         pad_token_id=tokenizer.pad_token_id,
                         eos_token_id=tokenizer.eos_token_id,
                         use_cache=False,  # Avoid KV cache memory issues
+                        repetition_penalty=repetition_penalty,  # Prevent repetitive loops
+                        no_repeat_ngram_size=3,  # Prevent 3-gram repetitions
                     )
             else:
                 # Get input embeddings for generation
@@ -187,7 +190,8 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
                     inference_mode=True
                 )
                 
-                # Generate using the LLM
+                # Generate using the LLM with repetition penalty
+                repetition_penalty = cfg.train.get("repetition_penalty", 1.2)
                 generated_ids = model.llm.generate(
                     inputs_embeds=outputs_embeds,
                     attention_mask=gen_attention_mask,
@@ -197,6 +201,8 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
                     pad_token_id=tokenizer.pad_token_id,
                     eos_token_id=tokenizer.eos_token_id,
                     use_cache=False,
+                    repetition_penalty=repetition_penalty,  # Prevent repetitive loops
+                    no_repeat_ngram_size=3,  # Prevent 3-gram repetitions
                 )
             
             # Decode generated texts

@@ -29,7 +29,8 @@ model:
   projector_ds_rate: 5
   # Small hidden dim to prevent overfitting on small dataset (3.5K samples)
   # With 512 hidden: ~2.6M params - appropriate for small data
-  projector_hidden_dim: 512
+  projector_hidden_dim: 1024
+  projector_dropout: 0.2  # Dropout for regularization (higher for small datasets)
   modal: audio
   normalize: false
   encoder_type: finetune
@@ -59,8 +60,8 @@ train:
   
   # Optimizer - lower LR + higher weight decay to prevent overfitting
   # Conservative settings for small dataset
-  lr: 5.0e-5
-  weight_decay: 0.1
+  lr: 3.0e-5  # Even lower LR to prevent overfitting
+  weight_decay: 0.15  # Increased weight decay for more regularization
   grad_clip: 1.0
   gamma: 0.85
   
@@ -93,8 +94,8 @@ scheduler:
 early_stopping: 
   monitor: val/wer  # Monitor WER instead of loss (lower is better)
   mode: min 
-  patience: 15  # 15 epochs without improvement
-  min_delta: 0.005  # 0.5% WER improvement required
+  patience: 10  # Reduced: 10 epochs without improvement (was 15)
+  min_delta: 0.01  # 1% WER improvement required (more strict)
 
 data:
   dataset: speech_dataset

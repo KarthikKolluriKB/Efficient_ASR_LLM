@@ -11,6 +11,8 @@ class EncoderProjectorConcat(nn.Module):
     
     For small datasets (<10K samples), use hidden_dim=512 to reduce overfitting.
     For large datasets (>100K samples), use hidden_dim=2048.
+    
+    Includes dropout for regularization on small datasets.
     """
     def __init__(self, config):
         super().__init__()
@@ -22,8 +24,12 @@ class EncoderProjectorConcat(nn.Module):
         # Default to 2048 for backward compatibility
         self.hidden_dim = getattr(config, 'projector_hidden_dim', 2048)
         
+        # Dropout for regularization (0.1-0.3 for small datasets)
+        dropout_rate = getattr(config, 'projector_dropout', 0.1)
+        
         self.linear1 = nn.Linear(self.encoder_dim * self.k, self.hidden_dim)
         self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=dropout_rate)
         self.linear2 = nn.Linear(self.hidden_dim, config.llm_dim)
 
     def forward(self, x):
@@ -37,6 +43,7 @@ class EncoderProjectorConcat(nn.Module):
         x = x.view(batch_size, seq_len // self.k, dim * self.k)
         x = self.linear1(x)
         x = self.relu(x)
+        x = self.dropout(x)  # Apply dropout after activation
         x = self.linear2(x)
         return x
     
