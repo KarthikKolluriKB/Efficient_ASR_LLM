@@ -1,6 +1,7 @@
 import os 
 import time 
 import argparse 
+import gc
 
 from dotenv import load_dotenv
 load_dotenv()  # Load environment variables from .env file (including WANDB_API_KEY)
@@ -22,6 +23,17 @@ from datamodule.dataset import get_speech_dataset
 from utils.metrics import decode_texts_from_outputs, compute_wer, count_encoder_parameters
 from utils.train_utils import print_model_size, print_module_size, save_and_print_examples
 import sys
+
+
+def log_gpu_memory(logger, step, prefix=""):
+    """Log GPU memory usage for debugging OOM issues."""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+        reserved = torch.cuda.memory_reserved() / 1024**3    # GB
+        max_allocated = torch.cuda.max_memory_allocated() / 1024**3  # GB
+        logger.debug(f"{prefix}Step {step} | GPU Mem: {allocated:.2f}GB alloc, {reserved:.2f}GB reserved, {max_allocated:.2f}GB max")
+        return allocated, reserved, max_allocated
+    return 0, 0, 0
 
 
 class EarlyStopChecker:
@@ -71,7 +83,7 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     amp_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
 
     with torch.no_grad():
-        for batch in dataloader:
+        for batch_idx, batch in enumerate(dataloader):
             # Move batch data to device
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
@@ -93,7 +105,7 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
                     
             else: 
                 # Forward pass
-                outputs = model(
+                outputs, metrics = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     labels=labels,
@@ -113,9 +125,10 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
                     all_wer_scores.append(metrics["wer"])
 
             # Get decoded texts from logits for final evaluation
+            # CRITICAL: Move to CPU to prevent GPU memory accumulation during eval
             hyp_texts, ref_texts = decode_texts_from_outputs(
-                logits=outputs.logits,
-                labels=labels,
+                logits=outputs.logits.detach().cpu(),
+                labels=labels.detach().cpu(),
                 tokenizer=tokenizer,
                 ignore_label=-100
             )
@@ -123,7 +136,19 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
             # Accumulate texts
             all_hyp_texts.extend(hyp_texts)
             all_ref_texts.extend(ref_texts)
+            
+            # CRITICAL: Clean up GPU memory after each eval batch
+            del input_ids, attention_mask, labels, audio_mel, modality_mask
+            del outputs, metrics
+            
+            # Clean GPU cache periodically during evaluation
+            if batch_idx % 5 == 0:
+                torch.cuda.empty_cache()
 
+    # Final cleanup after evaluation
+    gc.collect()
+    torch.cuda.empty_cache()
+    
     # Calculate final metrics
     val_loss = total_loss / max(n_batches, 1)
     val_acc = sum(all_accuracies) / max(len(all_accuracies), 1) if all_accuracies else 0.0
@@ -171,6 +196,12 @@ def main():
 
     # Move model to device
     model.to(device)
+
+    # Enable gradient checkpointing for LLM to reduce memory usage
+    # This trades compute for memory by recomputing activations during backward pass
+    if hasattr(model.llm, 'gradient_checkpointing_enable'):
+        model.llm.gradient_checkpointing_enable()
+        logger.info("Enabled gradient checkpointing for LLM (reduces memory usage)")
 
     # Freeze modules per config
     if cfg.train.freeze_encoder:
@@ -393,24 +424,39 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
                     clip_grad_norm_(projector_params, cfg.train.grad_clip)
                 optimizer.step()
 
-            # Periodic GPU cache cleanup to prevent memory fragmentation
-            if global_step % 50 == 0:
+            # Store loss value BEFORE deleting tensors (for logging)
+            loss_value = loss.item()
+
+            # Aggressive GPU memory cleanup to prevent OOM
+            # Delete tensors no longer needed
+            del input_ids, attention_mask, labels, audio_mel, modality_mask
+            del outputs, loss
+            
+            # Force garbage collection every 10 steps
+            if global_step % 10 == 0:
+                gc.collect()
                 torch.cuda.empty_cache()
 
             if global_step % cfg.log.log_interval == 0: 
                 elapsed = time.time() - start_time
                 lr = optimizer.param_groups[0]["lr"]
-                logger.info(f"Epoch={epoch} | Step={global_step} | WER={batch_wer:.4f} | W_ACC={word_acc:.4f} | Loss={loss.item():.4f} | Acc={float(acc):.4f} | LR={lr:.6e} | Time={elapsed:.2f}s")
+                
+                # Log memory usage for debugging
+                allocated, reserved, max_alloc = log_gpu_memory(logger, global_step, prefix="")
+                
+                logger.info(f"Epoch={epoch} | Step={global_step} | WER={batch_wer:.4f} | W_ACC={word_acc:.4f} | Loss={loss_value:.4f} | Acc={float(acc):.4f} | LR={lr:.6e} | GPU={allocated:.1f}GB | Time={elapsed:.2f}s")
                 if run is not None: 
                     run.log({
                         "train/wer": batch_wer,
                         "train/word_acc": word_acc,
-                        "train/loss": loss.item(),
+                        "train/loss": loss_value,
                         "train/acc": acc,
                         "train/lr": lr,
                         "train/epoch": epoch,
                         "train/step": global_step,
-                        "train/time_elapsed": elapsed
+                        "train/time_elapsed": elapsed,
+                        "train/gpu_allocated_gb": allocated,
+                        "train/gpu_reserved_gb": reserved,
                     }, step=global_step)
                 # Reset start time
                 start_time = time.time()

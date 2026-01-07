@@ -36,7 +36,7 @@ train:
   run_validation: true
   
   # Batch settings - adjust based on GPU memory
-  # Reduced from 8 to 4 to prevent OOM on variable-length audio
+  # For 48GB GPU with Qwen2.5-3B, batch_size=8 works after memory leak fixes
   batch_size: 8
   val_batch_size: 8
   gradient_accumulation_steps: 4  # Keeps effective batch size = 32

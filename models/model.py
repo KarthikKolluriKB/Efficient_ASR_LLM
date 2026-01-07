@@ -245,23 +245,30 @@ class ASRLLM(nn.Module):
             return inputs_embeds, attention_mask
         
         # Default path for training / evaluation
-        model_outputs = self.llm(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels)
+        # Explicitly disable KV cache to prevent memory accumulation during training
+        model_outputs = self.llm(
+            inputs_embeds=inputs_embeds, 
+            attention_mask=attention_mask, 
+            labels=labels,
+            use_cache=False  # Critical: prevents KV cache memory accumulation
+        )
 
-        # Metrics
+        # Metrics (computed on CPU to prevent GPU memory accumulation)
         metrics = {}
         if self.metric:
             with torch.no_grad():
-                # Compute token accuracy
-                preds = torch.argmax(model_outputs.logits, -1)
-                acc = compute_accuracy(preds.detach()[:, :-1], labels.detach()[:, 1:], ignore_label=-100)
+                # Compute token accuracy - move to CPU immediately
+                preds = torch.argmax(model_outputs.logits.detach(), dim=-1).cpu()
+                labels_cpu = labels.detach().cpu()
+                acc = compute_accuracy(preds[:, :-1], labels_cpu[:, 1:], ignore_label=-100)
                 metrics["acc"] = float(acc.item())
 
-                # Compute WER (batch-level average)
+                # Compute WER (batch-level average) - use CPU tensors
                 if hasattr(model_outputs, "logits"):
-                    # First decode the texts using decode_texts_from_outputs
+                    # First decode the texts using decode_texts_from_outputs (CPU)
                     hyp_texts, ref_texts = decode_texts_from_outputs(
-                        logits=model_outputs.logits,
-                        labels=labels,
+                        logits=model_outputs.logits.detach().cpu(),
+                        labels=labels_cpu,
                         tokenizer=self.tokenizer,
                         ignore_label=-100
                     )
@@ -272,6 +279,9 @@ class ASRLLM(nn.Module):
                         ref_texts=ref_texts
                     )
                     metrics["wer"] = float(wer_score)
+                
+                # Explicitly delete CPU tensors to free memory
+                del preds, labels_cpu
 
         return model_outputs, metrics
     
