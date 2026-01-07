@@ -38,9 +38,10 @@ train:
   # Batch settings - adjust based on GPU memory
   # For 48GB GPU with Qwen2.5-3B, batch_size=8 works after memory leak fixes
   batch_size: 8
-  val_batch_size: 8  # Safe now - we skip loss computation during eval
+  val_batch_size: 1  # Must be 1 - logits tensor is ~6GB per sample with long audio!
   gradient_accumulation_steps: 4  # Keeps effective batch size = 32
   num_workers: 4
+  max_eval_batches: 500  # Limit eval to 500 samples for faster validation (null = use all)
   
   # Training settings
   num_epochs: 15

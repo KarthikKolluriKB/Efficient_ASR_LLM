@@ -88,9 +88,21 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     
     use_autocast = bool(cfg.train.mixed_precision and getattr(device, "type", str(device)) == "cuda")
     amp_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
+    
+    # Limit validation to first N batches for faster evaluation (optional)
+    max_eval_batches = cfg.train.get("max_eval_batches", None)  # None = use all
+    total_batches = len(dataloader)
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(dataloader):
+            # Optional: limit number of eval batches for faster validation
+            if max_eval_batches is not None and batch_idx >= max_eval_batches:
+                break
+                
+            # Progress indicator every 50 batches
+            if batch_idx % 50 == 0:
+                print(f"  Eval batch {batch_idx}/{total_batches}...", end="\r")
+            
             # Move batch data to device
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
