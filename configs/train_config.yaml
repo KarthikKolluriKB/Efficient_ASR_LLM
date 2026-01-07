@@ -77,7 +77,7 @@ train:
   num_freeze_layers: 0
   
   # Output
-  output_dir: outputs/whisp_b_concatlin_small_qwen_danish/
+  output_dir: outputs/whisp_b_concatlin_med_qwen_danish/
   save_model: true
   seed: 42
   one_gpu: true
@@ -129,7 +129,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null  # Uses your default wandb account
   wandb_project_name: SLAM_ASR_Danish
-  wandb_exp_name: whisp_b_concatlin_small_qwen_danish
+  wandb_exp_name: whisp_b_concatlin_med_qwen_danish
   log_dir: ./logs
   log_filename: train.log
   log_interval: 50
