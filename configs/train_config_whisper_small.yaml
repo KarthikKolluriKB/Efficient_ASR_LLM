@@ -1,0 +1,131 @@
+# =============================================================================
+# SLAM-ASR Training Configuration - WHISPER-SMALL EXPERIMENT
+# Common Voice Danish - SPEAKABLE 2026
+# =============================================================================
+# EXPERIMENT: Use Whisper-Small encoder (better features, still frozen)
+# HYPOTHESIS: Larger encoder extracts richer Danish speech features
+# RUN: CUDA_VISIBLE_DEVICES=1 python train.py --config configs/train_config_whisper_small.yaml
+# =============================================================================
+
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+  
+  # LLM - Qwen2.5-3B (multilingual, supports Danish)
+  llm_model_name: qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
+  llm_dim: 2048
+  llm_model_path: null
+  llm_type: decoder_only
+  
+  # KEY CHANGE: Whisper-SMALL (244M params, 768-dim, 12 layers)
+  # vs Whisper-base (74M params, 512-dim, 6 layers)
+  encoder_model_name: whisper-small
+  encoder_model: small  # Multilingual whisper-small
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_dim: 768  # <<< Whisper-small has 768-dim output (vs 512 for base)
+  encoder_num_layers: null  # Use all 12 layers
+  
+  # Projector: maps encoder dim (768) -> LLM dim (2048)
+  projector: linear
+  projector_ds_rate: 5
+  projector_hidden_dim: 2048
+  projector_dropout: 0.2
+  modal: audio
+  normalize: false
+  encoder_type: finetune
+
+train:
+  model_name: ASRLLM
+  run_validation: true
+  
+  # Batch settings - slightly smaller due to larger encoder
+  batch_size: 12  # Reduced from 16 (larger encoder uses more memory)
+  val_batch_size: 48  # Reduced from 64
+  gradient_accumulation_steps: 3  # Effective batch = 12 * 3 = 36
+  num_workers: 8
+  max_eval_batches: 100
+  max_new_tokens: 128
+  
+  # Generation parameters
+  repetition_penalty: 1.5
+  
+  # Training settings
+  num_epochs: 50
+  total_steps: 100000
+  warmup_steps: 200
+  validation_interval: 100  # ~1 epoch (3592 / 36 = 100)
+  
+  # Optimizer
+  lr: 3.0e-5
+  weight_decay: 0.15
+  grad_clip: 1.0
+  gamma: 0.85
+  
+  # Memory optimization
+  use_fp16: false
+  mixed_precision: true
+  quantization: false
+  
+  # KEEP FROZEN: Only train projector
+  freeze_llm: true
+  freeze_encoder: true  # Encoder stays frozen
+  freeze_layers: false
+  num_freeze_layers: 0
+  
+  # Output
+  output_dir: outputs/whisp_small_concatlin_qwen_danish/
+  save_model: true
+  seed: 42
+  one_gpu: true
+  use_peft: false
+  use_fast_kernels: false
+  batching_strategy: packing
+  context_length: 384
+
+scheduler: 
+  name: cosine_with_warmup
+  total_training_steps: 5000
+  warmup_steps: 200
+
+early_stopping: 
+  monitor: val/wer
+  mode: min 
+  patience: 10
+  min_delta: 0.01
+
+data:
+  dataset: speech_dataset
+  file: datamodule/dataset.py:get_speech_dataset
+  
+  train_data_path: data/common_voice_da/train.jsonl
+  val_data_path: data/common_voice_da/validation.jsonl
+  test_data_path: data/common_voice_da/test.jsonl
+  
+  train_split: train
+  val_split: val
+  test_split: test
+  
+  input_type: mel
+  mel_size: 80
+  normalize: false
+  use_variable_length: true
+  max_audio_length: 20
+  fix_length_audio: -1
+  inference_mode: false
+  
+  prompt: null
+  data_path: null
+  max_words: null
+  max_mel: null
+
+log:
+  use_wandb: true
+  wandb_dir: ./wandb
+  wandb_entity_name: null
+  wandb_project_name: SLAM_ASR_Danish
+  wandb_exp_name: whisp_small_concatlin_qwen_danish
+  log_dir: ./logs
+  log_filename: train_whisper_small.log
+  log_interval: 50
