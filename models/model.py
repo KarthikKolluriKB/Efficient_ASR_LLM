@@ -249,13 +249,14 @@ class ASRLLM(nn.Module):
         model_outputs = self.llm(
             inputs_embeds=inputs_embeds, 
             attention_mask=attention_mask, 
-            labels=labels,
+            labels=labels,  # Can be None during eval to skip loss computation
             use_cache=False  # Critical: prevents KV cache memory accumulation
         )
 
         # Metrics (computed on CPU to prevent GPU memory accumulation)
+        # Skip metrics when labels=None (eval mode skips loss computation to save memory)
         metrics = {}
-        if self.metric:
+        if self.metric and labels is not None:
             with torch.no_grad():
                 # Compute token accuracy - move to CPU immediately
                 preds = torch.argmax(model_outputs.logits.detach(), dim=-1).cpu()

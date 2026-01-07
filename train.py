@@ -101,44 +101,54 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
 
             if use_autocast:
                 with torch.autocast(device_type=device, dtype=amp_dtype): 
-                    # Forward pass
+                    # Forward pass WITHOUT labels to skip loss computation (saves ~50GB memory!)
+                    # The LLM's loss function converts logits to float32 which causes OOM
                     outputs, metrics = model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
-                        labels=labels,
+                        labels=None,  # Don't compute loss in LLM - too memory intensive
                         audio_mel=audio_mel,
                         modality_mask=modality_mask
                     )
                     
             else: 
-                # Forward pass
+                # Forward pass WITHOUT labels
                 outputs, metrics = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
-                    labels=labels,
+                    labels=None,  # Don't compute loss in LLM
                     audio_mel=audio_mel,
                     modality_mask=modality_mask
                 )
             
-            # Accumulate loss
-            total_loss += outputs.loss.item()
+            # Skip loss accumulation (we're not computing it to save memory)
+            # total_loss += outputs.loss.item()  # No loss when labels=None
             n_batches += 1
 
-            # Store metrics from model
-            if metrics is not None:
-                if "acc" in metrics:
-                    all_accuracies.append(metrics["acc"])
-                if "wer" in metrics:
-                    all_wer_scores.append(metrics["wer"])
+            # Compute accuracy manually on CPU to save memory
+            # Move logits to CPU immediately to free GPU memory
+            logits_cpu = outputs.logits.detach().cpu()
+            labels_cpu = labels.detach().cpu()
+            
+            # Compute token-level accuracy
+            preds = torch.argmax(logits_cpu, dim=-1)
+            mask = labels_cpu != -100
+            if mask.sum() > 0:
+                acc = (preds[mask] == labels_cpu[mask]).float().mean().item()
+                all_accuracies.append(acc)
 
-            # Get decoded texts from logits for final evaluation
-            # CRITICAL: Move to CPU to prevent GPU memory accumulation during eval
+            # Get decoded texts from logits for WER evaluation
             hyp_texts, ref_texts = decode_texts_from_outputs(
-                logits=outputs.logits.detach().cpu(),
-                labels=labels.detach().cpu(),
+                logits=logits_cpu,
+                labels=labels_cpu,
                 tokenizer=tokenizer,
                 ignore_label=-100
             )
+            
+            # Compute WER for this batch
+            if hyp_texts and ref_texts:
+                batch_wer = compute_wer(hyp_texts, ref_texts)
+                all_wer_scores.append(batch_wer)
             
             # Accumulate texts
             all_hyp_texts.extend(hyp_texts)
@@ -146,10 +156,11 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
             
             # CRITICAL: Clean up GPU memory after each eval batch
             del input_ids, attention_mask, labels, audio_mel, modality_mask
-            del outputs, metrics, hyp_texts, ref_texts
+            del outputs, logits_cpu, labels_cpu, preds
+            if metrics is not None:
+                del metrics
             
-            # Clean GPU cache after EVERY batch during evaluation (not every 5)
-            # This is critical because logits are huge (~1GB per sample with 150k vocab)
+            # Clean GPU cache after EVERY batch during evaluation
             gc.collect()
             torch.cuda.empty_cache()
 
@@ -162,7 +173,8 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
         model.llm.gradient_checkpointing_enable()
     
     # Calculate final metrics
-    val_loss = total_loss / max(n_batches, 1)
+    # Note: val_loss is 0.0 because we skip loss computation during eval to save memory
+    val_loss = 0.0  # Not computed to avoid OOM (loss function converts to float32)
     val_acc = sum(all_accuracies) / max(len(all_accuracies), 1) if all_accuracies else 0.0
     val_wer_score = sum(all_wer_scores) / max(len(all_wer_scores), 1) if all_wer_scores else 0.0
     val_word_acc = 1.0 - val_wer_score if val_wer_score >= 0.0 else 0.0
