@@ -27,9 +27,9 @@ model:
   # Projector: maps encoder dim (512) -> LLM dim (2048)
   projector: linear
   projector_ds_rate: 5
-  # Medium hidden dim - balanced capacity vs overfitting risk
-  # With 1024 hidden: ~5.2M params (between 512=2.6M and 2048=9.4M)
-  projector_hidden_dim: 1024
+  # Small hidden dim to prevent overfitting on small dataset (3.5K samples)
+  # With 512 hidden: ~2.6M params - appropriate for small data
+  projector_hidden_dim: 512
   modal: audio
   normalize: false
   encoder_type: finetune
@@ -48,7 +48,7 @@ train:
   max_new_tokens: 128  # Max tokens to generate during eval
   
   # Generation parameters for evaluation
-  repetition_penalty: 1.2  # Prevent repetitive outputs like "Human Human Human"
+  repetition_penalty: 1.5  # Higher penalty to prevent repetitive loops
   
   # Training settings - MANY more epochs for projector-only training
   # With frozen LLM, projector needs 50-100 epochs to learn audio-text mapping
@@ -57,10 +57,10 @@ train:
   warmup_steps: 200  # ~2 epochs warmup (112 steps/epoch)
   validation_interval: 112  # Validate every epoch (3592 / 32 = 112)
   
-  # Optimizer - lower LR for more stable projector training
-  # Start with 1e-4 and let scheduler decay it
-  lr: 1.0e-4
-  weight_decay: 0.01
+  # Optimizer - lower LR + higher weight decay to prevent overfitting
+  # Conservative settings for small dataset
+  lr: 5.0e-5
+  weight_decay: 0.1
   grad_clip: 1.0
   gamma: 0.85
   
@@ -76,7 +76,7 @@ train:
   num_freeze_layers: 0
   
   # Output
-  output_dir: outputs/whisp_b_concatlin_med_qwen_danish/
+  output_dir: outputs/whisp_b_concatlin_small_qwen_danish/
   save_model: true
   seed: 42
   one_gpu: true
@@ -128,7 +128,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null  # Uses your default wandb account
   wandb_project_name: SLAM_ASR_Danish
-  wandb_exp_name: whisp_b_concatlin_med_qwen_danish
+  wandb_exp_name: whisp_b_concatlin_small_qwen_danish
   log_dir: ./logs
   log_filename: train.log
   log_interval: 50
