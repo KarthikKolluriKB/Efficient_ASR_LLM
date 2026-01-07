@@ -40,11 +40,11 @@ train:
   
   # Batch settings - adjust based on GPU memory
   # For 48GB GPU with Qwen2.5-3B, these settings work well
-  batch_size: 8  # Smaller batch for more updates per epoch
-  val_batch_size: 4  # Use 1 for generation-based eval (uses more memory than forward pass)
-  gradient_accumulation_steps: 4  # Keeps effective batch size = 32
-  num_workers: 4
-  max_eval_batches: 500  # Limit eval batches for faster validation during training
+  batch_size: 32  # Increased from 8 - GPU has capacity
+  val_batch_size: 16  # Increased from 4
+  gradient_accumulation_steps: 2  # Reduced to compensate for larger batch
+  num_workers: 8  # Increased for faster data loading
+  max_eval_batches: 200  # Limit eval batches for faster validation during training
   max_new_tokens: 128  # Max tokens to generate during eval
   
   # Generation parameters for evaluation
@@ -52,10 +52,10 @@ train:
   
   # Training settings - MANY more epochs for projector-only training
   # With frozen LLM, projector needs 50-100 epochs to learn audio-text mapping
-  num_epochs: 50
+  num_epochs: 30
   total_steps: 100000
-  warmup_steps: 200  # ~2 epochs warmup (112 steps/epoch)
-  validation_interval: 112  # Validate every epoch
+  warmup_steps: 100  # ~2 epochs warmup (56 steps/epoch)
+  validation_interval: 56  # Validate every epoch
   
   # Optimizer - lower LR for more stable projector training
   # Start with 1e-4 and let scheduler decay it
