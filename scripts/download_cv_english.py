@@ -62,10 +62,12 @@ def process_tsv(tsv_path, output_jsonl, audio_dir, max_samples=None):
             if not audio_path.exists():
                 continue
             
-            # Create sample entry with relative path
+            # Create sample entry matching dataset.py expectations
+            # Uses "source" for audio path and "target" for transcription
             samples.append({
-                "audio": str(audio_path),
-                "text": text,
+                "source": str(audio_path),
+                "target": text,
+                "prompt": "ASR",
             })
     
     # Write JSONL
