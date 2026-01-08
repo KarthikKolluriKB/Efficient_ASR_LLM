@@ -48,10 +48,11 @@ echo ""
 echo "[Step 1/4] Getting download token..."
 echo ""
 
-RESPONSE=$(curl -s -X POST \
-    "https://datacollective.mozillafoundation.org/api/datasets/${DATASET_ID}/download" \
-    -H "Authorization: Bearer ${API_KEY}" \
-    -H "Content-Type: application/json")
+RESPONSE=$(wget -q -O - \
+    --header="Authorization: Bearer ${API_KEY}" \
+    --header="Content-Type: application/json" \
+    --post-data="" \
+    "https://datacollective.mozillafoundation.org/api/datasets/${DATASET_ID}/download")
 
 echo "Response: $RESPONSE"
 
@@ -59,8 +60,8 @@ echo "Response: $RESPONSE"
 DOWNLOAD_TOKEN=$(echo "$RESPONSE" | grep -o '"downloadToken":"[^"]*"' | cut -d'"' -f4)
 
 if [ -z "$DOWNLOAD_TOKEN" ]; then
-    # Try alternative parsing
-    DOWNLOAD_TOKEN=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('downloadToken', json.load(sys.stdin).get('token', '')))" 2>/dev/null || echo "")
+    # Try alternative parsing with python
+    DOWNLOAD_TOKEN=$(echo "$RESPONSE" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('downloadToken', d.get('token', '')))" 2>/dev/null || echo "")
 fi
 
 if [ -z "$DOWNLOAD_TOKEN" ]; then
@@ -69,8 +70,9 @@ if [ -z "$DOWNLOAD_TOKEN" ]; then
     echo "Response was: $RESPONSE"
     echo ""
     echo "Please manually extract the token and run:"
-    echo "  curl -X GET 'https://datacollective.mozillafoundation.org/api/datasets/${DATASET_ID}/download/YOUR_TOKEN' \\"
-    echo "    -H 'Authorization: Bearer ${API_KEY}' -o '$ARCHIVE_NAME'"
+    echo "  wget --header='Authorization: Bearer ${API_KEY}' \\"
+    echo "    'https://datacollective.mozillafoundation.org/api/datasets/${DATASET_ID}/download/YOUR_TOKEN' \\"
+    echo "    -O '$ARCHIVE_NAME'"
     exit 1
 fi
 
@@ -81,11 +83,10 @@ echo ""
 echo "[Step 2/4] Downloading Common Voice Scripted Speech English..."
 echo ""
 
-curl -X GET \
+wget --header="Authorization: Bearer ${API_KEY}" \
     "https://datacollective.mozillafoundation.org/api/datasets/${DATASET_ID}/download/${DOWNLOAD_TOKEN}" \
-    -H "Authorization: Bearer ${API_KEY}" \
-    -o "$ARCHIVE_NAME" \
-    --progress-bar
+    -O "$ARCHIVE_NAME" \
+    --show-progress
 
 # Check if download succeeded
 if [ ! -f "$ARCHIVE_NAME" ] || [ ! -s "$ARCHIVE_NAME" ]; then
