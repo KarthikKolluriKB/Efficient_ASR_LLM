@@ -20,7 +20,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 # Config - UPDATE THIS PATH to match your downloaded corpus version
-CV_CORPUS_DIR = Path("data/cv-corpus-20.0-2024-12-06/en")  # Adjust version if needed
+CV_CORPUS_DIR = Path("data/cv-corpus-24.0-2025-12-05/en")  # Adjust version if needed
 OUTPUT_DIR = Path("data/common_voice_en")
 
 # =============================================================================
