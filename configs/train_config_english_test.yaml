@@ -74,7 +74,7 @@ train:
   num_freeze_layers: 0
   
   # Output
-  output_dir: outputs/english_test_validation/
+  output_dir: outputs/slam_asr_eng_test/
   save_model: true
   seed: 42
   one_gpu: true
@@ -124,8 +124,8 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_Danish
-  wandb_exp_name: english_test_architecture_validation
+  wandb_project_name: SLAM_ASR_Test  # Separate project for testing
+  wandb_exp_name: slam_asr_english_test
   log_dir: ./logs
   log_filename: train_english_test.log
   log_interval: 50
