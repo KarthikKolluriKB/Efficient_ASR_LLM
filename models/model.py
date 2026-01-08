@@ -246,12 +246,45 @@ class ASRLLM(nn.Module):
         if modality_mask is not None:
             modality_mask_start_indices = (modality_mask == True).float().argmax(dim=1)
             modality_lengths = torch.clamp(modality_mask.sum(dim=1), max=encoder_outputs.shape[1]).tolist()
+            
+            # DEBUG: Check modality mask alignment
+            debug_key_mod = f"_debug_modality_{labels is not None}"
+            if not hasattr(self, debug_key_mod):
+                mode = "TRAIN" if labels is not None else "EVAL"
+                print(f"[DEBUG MODEL {mode}] modality_mask shape: {modality_mask.shape}")
+                print(f"[DEBUG MODEL {mode}] modality_mask_start_indices: {modality_mask_start_indices.tolist()}")
+                print(f"[DEBUG MODEL {mode}] modality_lengths (clamped to encoder output): {modality_lengths}")
+                print(f"[DEBUG MODEL {mode}] encoder_outputs shape for replacement: {encoder_outputs.shape}")
+                print(f"[DEBUG MODEL {mode}] Original modality_mask True counts: {modality_mask.sum(dim=1).tolist()}")
+                setattr(self, debug_key_mod, True)
 
             encoder_outs_pad = torch.zeros_like(inputs_embeds)
             for i in range(encoder_outputs.shape[0]):
                 encoder_outs_pad[
                     i, modality_mask_start_indices[i]:modality_mask_start_indices[i]+modality_lengths[i]
                 ] = encoder_outputs[i][:modality_lengths[i]]
+            
+            # DEBUG: Verify embedding replacement
+            debug_key_emb = f"_debug_embedding_{labels is not None}"
+            if not hasattr(self, debug_key_emb):
+                mode = "TRAIN" if labels is not None else "EVAL"
+                # Check if encoder embeddings are actually being used
+                sample_idx = 0
+                start = int(modality_mask_start_indices[sample_idx])
+                length = int(modality_lengths[sample_idx])
+                text_embed_norm = inputs_embeds[sample_idx, start:start+5].norm().item()
+                enc_embed_norm = encoder_outs_pad[sample_idx, start:start+5].norm().item()
+                final_audio_norm = (encoder_outs_pad + inputs_embeds * (~modality_mask[:, :, None]))[sample_idx, start:start+5].norm().item()
+                final_text_norm = (encoder_outs_pad + inputs_embeds * (~modality_mask[:, :, None]))[sample_idx, start+length:start+length+5].norm().item()
+                print(f"[DEBUG MODEL {mode}] Sample 0 - Audio region norms:")
+                print(f"  Text embedding at audio pos (should be zeroed): {text_embed_norm:.4f}")
+                print(f"  Encoder embedding at audio pos: {enc_embed_norm:.4f}")
+                print(f"  Final embedding at audio pos (should be encoder): {final_audio_norm:.4f}")
+                print(f"  Final embedding at text pos (prompt): {final_text_norm:.4f}")
+                # Check if modality_mask is correct
+                print(f"  modality_mask at audio positions: {modality_mask[sample_idx, start:start+5].tolist()}")
+                print(f"  modality_mask at text positions: {modality_mask[sample_idx, start+length:start+length+5].tolist()}")
+                setattr(self, debug_key_emb, True)
             
             inputs_embeds = encoder_outs_pad + inputs_embeds * (~modality_mask[:, :, None])
         

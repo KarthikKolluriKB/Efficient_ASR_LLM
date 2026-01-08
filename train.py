@@ -63,6 +63,9 @@ class EarlyStopChecker:
 def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     """Evaluate the model on the given dataloader using actual generation.
     
+    NOTE: The dataloader returns full sequences (audio + prompt + answer) for training.
+    For generation, we must truncate to only (audio + prompt) so the model can generate.
+    
     Args:
         model: The model to evaluate
         dataloader: DataLoader containing validation/test data
@@ -122,6 +125,51 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
                     ref_text = tokenizer.decode(valid_tokens, skip_special_tokens=True).strip()
                     ref_texts.append(ref_text)
             
+            # === CRITICAL FIX: Truncate inputs for generation ===
+            # The input_ids contain: [audio_placeholder] + [prompt] + [answer] + [eos]
+            # For generation, we need ONLY: [audio_placeholder] + [prompt]
+            # Find where answer starts: first position where labels != -100
+            # Then truncate input_ids, attention_mask, and modality_mask to that position
+            
+            gen_input_ids_list = []
+            gen_attention_mask_list = []
+            gen_modality_mask_list = []
+            
+            for i in range(labels.shape[0]):
+                # Find where the answer starts (first non-ignored label)
+                label_row = labels[i]
+                answer_start_positions = (label_row != -100).nonzero(as_tuple=True)[0]
+                
+                if len(answer_start_positions) > 0:
+                    answer_start = answer_start_positions[0].item()
+                else:
+                    # Fallback: use full sequence (shouldn't happen)
+                    answer_start = label_row.shape[0]
+                
+                # Truncate to only audio + prompt (exclude answer)
+                gen_input_ids_list.append(input_ids[i, :answer_start])
+                gen_attention_mask_list.append(attention_mask[i, :answer_start])
+                gen_modality_mask_list.append(modality_mask[i, :answer_start])
+            
+            # Pad truncated sequences to same length
+            max_gen_len = max(len(seq) for seq in gen_input_ids_list)
+            gen_input_ids = torch.zeros(len(gen_input_ids_list), max_gen_len, dtype=input_ids.dtype, device=device)
+            gen_attention_mask = torch.zeros(len(gen_attention_mask_list), max_gen_len, dtype=attention_mask.dtype, device=device)
+            gen_modality_mask = torch.zeros(len(gen_modality_mask_list), max_gen_len, dtype=modality_mask.dtype, device=device)
+            
+            for i, (ids, mask, mod_mask) in enumerate(zip(gen_input_ids_list, gen_attention_mask_list, gen_modality_mask_list)):
+                seq_len = len(ids)
+                # Left-pad to align with original padding strategy
+                gen_input_ids[i, max_gen_len - seq_len:] = ids
+                gen_attention_mask[i, max_gen_len - seq_len:] = mask
+                gen_modality_mask[i, max_gen_len - seq_len:] = mod_mask
+            
+            # Debug: print truncation info on first batch
+            if batch_idx == 0:
+                print(f"\n[DEBUG EVAL] Original input_ids shape: {input_ids.shape}")
+                print(f"[DEBUG EVAL] Truncated gen_input_ids shape: {gen_input_ids.shape}")
+                print(f"[DEBUG EVAL] First sample - answer starts at position: {(labels[0] != -100).nonzero(as_tuple=True)[0][0].item() if (labels[0] != -100).any() else 'N/A'}")
+            
             # === STEP 1: Compute loss and accuracy with forward pass ===
             if use_autocast:
                 with torch.autocast(device_type=device, dtype=amp_dtype):
@@ -152,57 +200,32 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
             # Free the model outputs before generation
             del model_outputs
             
-            # === STEP 2: Generate for WER computation ===
+            # === STEP 2: Generate for WER computation using model.generate() ===
+            # Use truncated inputs (audio + prompt only, no answer)
+            repetition_penalty = cfg.train.get("repetition_penalty", 1.2)
+            
             if use_autocast:
                 with torch.autocast(device_type=device, dtype=amp_dtype):
-                    # Get input embeddings for generation
-                    outputs_embeds, gen_attention_mask = model.forward(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        labels=None,
-                        audio_mel=audio_mel,
-                        modality_mask=modality_mask,
-                        inference_mode=True
-                    )
-                    
-                    # Generate using the LLM with repetition penalty
-                    repetition_penalty = cfg.train.get("repetition_penalty", 1.2)
-                    generated_ids = model.llm.generate(
-                        inputs_embeds=outputs_embeds,
+                    generated_ids = model.generate(
+                        input_ids=gen_input_ids,
                         attention_mask=gen_attention_mask,
+                        audio_mel=audio_mel,
+                        modality_mask=gen_modality_mask,
                         max_new_tokens=max_new_tokens,
-                        num_beams=1,  # Greedy for speed
+                        num_beams=1,
                         do_sample=False,
-                        pad_token_id=tokenizer.pad_token_id,
-                        eos_token_id=tokenizer.eos_token_id,
-                        use_cache=False,  # Avoid KV cache memory issues
-                        repetition_penalty=repetition_penalty,  # Prevent repetitive loops
-                        no_repeat_ngram_size=3,  # Prevent 3-gram repetitions
+                        repetition_penalty=repetition_penalty,
                     )
             else:
-                # Get input embeddings for generation
-                outputs_embeds, gen_attention_mask = model.forward(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=None,
-                    audio_mel=audio_mel,
-                    modality_mask=modality_mask,
-                    inference_mode=True
-                )
-                
-                # Generate using the LLM with repetition penalty
-                repetition_penalty = cfg.train.get("repetition_penalty", 1.2)
-                generated_ids = model.llm.generate(
-                    inputs_embeds=outputs_embeds,
+                generated_ids = model.generate(
+                    input_ids=gen_input_ids,
                     attention_mask=gen_attention_mask,
+                    audio_mel=audio_mel,
+                    modality_mask=gen_modality_mask,
                     max_new_tokens=max_new_tokens,
                     num_beams=1,
                     do_sample=False,
-                    pad_token_id=tokenizer.pad_token_id,
-                    eos_token_id=tokenizer.eos_token_id,
-                    use_cache=False,
-                    repetition_penalty=repetition_penalty,  # Prevent repetitive loops
-                    no_repeat_ngram_size=3,  # Prevent 3-gram repetitions
+                    repetition_penalty=repetition_penalty,
                 )
             
             # Decode generated texts
@@ -228,8 +251,8 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
             
             # CRITICAL: Clean up GPU memory after each eval batch
             del input_ids, attention_mask, labels, audio_mel, modality_mask
-            del outputs_embeds, gen_attention_mask, generated_ids
-            del labels_cpu
+            del gen_input_ids, gen_attention_mask, gen_modality_mask
+            del generated_ids, labels_cpu
             
             # Clean GPU cache after EVERY batch during evaluation
             gc.collect()
