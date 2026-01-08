@@ -20,13 +20,21 @@ from pathlib import Path
 from tqdm import tqdm
 
 # Config - UPDATE THIS PATH to match your downloaded corpus version
-CV_CORPUS_DIR = Path("data/cv-corpus-24.0-2025-12-05/en")  # Adjust version if needed
+CV_CORPUS_DIR = Path("data/cv-corpus-20.0-2024-12-06/en")  # Adjust version if needed
 OUTPUT_DIR = Path("data/common_voice_en")
 
-# Limit samples for quick test (~50-60 hours)
-MAX_TRAIN_SAMPLES = 30000  # ~50-60 hours (avg 6-7 sec per clip)
-MAX_VAL_SAMPLES = 3000
-MAX_TEST_SAMPLES = 3000
+# =============================================================================
+# IMPORTANT: We only process a SUBSET for testing (50-100 hours)
+# Even though the full download is large, we only use this much:
+# =============================================================================
+MAX_TRAIN_HOURS = 50  # Target ~50 hours of training data
+AVG_CLIP_SECONDS = 5  # Average clip length in Common Voice
+MAX_TRAIN_SAMPLES = int(MAX_TRAIN_HOURS * 3600 / AVG_CLIP_SECONDS)  # ~36,000 samples
+
+MAX_VAL_SAMPLES = 3000   # ~4 hours for validation
+MAX_TEST_SAMPLES = 3000  # ~4 hours for testing
+
+print(f"Will process max {MAX_TRAIN_SAMPLES} train samples (~{MAX_TRAIN_HOURS} hours)")
 
 
 def process_tsv(tsv_path, output_jsonl, audio_dir, max_samples=None):
