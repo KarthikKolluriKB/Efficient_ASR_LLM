@@ -1,113 +1,146 @@
 """
-Download Common Voice English subset for architecture validation test.
+Process Common Voice English dataset for architecture validation test.
 This is temporary - delete after confirming architecture works.
 
-Usage: python scripts/download_cv_english.py
+STEP 1: Download Common Voice English from:
+        https://commonvoice.mozilla.org/en/datasets
+        Extract to: data/cv-corpus-XX/en/
+
+STEP 2: Run this script:
+        python scripts/download_cv_english.py
+
+STEP 3: Train:
+        python train.py --config configs/train_config_english_test.yaml
 """
 
 import os
+import csv
 import json
 from pathlib import Path
-from datasets import load_dataset
-import soundfile as sf
 from tqdm import tqdm
 
-# Config
+# Config - UPDATE THIS PATH to match your downloaded corpus version
+CV_CORPUS_DIR = Path("data/cv-corpus-24.0-2025-12-05/en")  # Adjust version if needed
 OUTPUT_DIR = Path("data/common_voice_en")
-AUDIO_DIR = OUTPUT_DIR / "audio"
+
+# Limit samples for quick test (~50-60 hours)
 MAX_TRAIN_SAMPLES = 30000  # ~50-60 hours (avg 6-7 sec per clip)
 MAX_VAL_SAMPLES = 3000
 MAX_TEST_SAMPLES = 3000
 
-def main():
-    print("=" * 60)
-    print("Downloading Common Voice English (subset for testing)")
-    print("=" * 60)
+
+def process_tsv(tsv_path, output_jsonl, audio_dir, max_samples=None):
+    """Process a Common Voice TSV file to JSONL format."""
+    samples = []
     
-    # Create directories
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-    
-    # Load dataset from Hugging Face (streaming to avoid full download)
-    print("\nLoading dataset from Hugging Face...")
-    print("This may take a while for the first download...\n")
-    
-    # Load English Common Voice
-    dataset = load_dataset(
-        "mozilla-foundation/common_voice_17_0",
-        "en",
-        trust_remote_code=True
-    )
-    
-    # Process each split
-    for split_name, max_samples, output_file in [
-        ("train", MAX_TRAIN_SAMPLES, "train.jsonl"),
-        ("validation", MAX_VAL_SAMPLES, "validation.jsonl"),
-        ("test", MAX_TEST_SAMPLES, "test.jsonl"),
-    ]:
-        print(f"\nProcessing {split_name} split (max {max_samples} samples)...")
+    with open(tsv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f, delimiter='\t')
         
-        split_audio_dir = AUDIO_DIR / split_name
-        split_audio_dir.mkdir(parents=True, exist_ok=True)
-        
-        split_data = dataset[split_name]
-        samples = []
-        
-        for i, item in enumerate(tqdm(split_data, total=min(max_samples, len(split_data)))):
-            if i >= max_samples:
+        for i, row in enumerate(tqdm(reader, desc=f"Processing {tsv_path.name}")):
+            if max_samples and i >= max_samples:
                 break
             
-            # Get audio and text
-            audio = item["audio"]
-            text = item["sentence"].strip()
+            # Get audio path and text
+            audio_filename = row['path']
+            text = row['sentence'].strip()
             
-            if not text:  # Skip empty transcripts
+            if not text:
                 continue
             
-            # Save audio file
-            audio_filename = f"en_{split_name}_{i:06d}.wav"
-            audio_path = split_audio_dir / audio_filename
+            # Build full audio path
+            audio_path = audio_dir / audio_filename
             
-            # Save as WAV (16kHz)
-            sf.write(
-                str(audio_path),
-                audio["array"],
-                audio["sampling_rate"]
-            )
+            # Check if audio file exists
+            if not audio_path.exists():
+                continue
             
-            # Create sample entry
+            # Create sample entry with relative path
             samples.append({
-                "audio": str(audio_path.relative_to(OUTPUT_DIR.parent.parent)),
+                "audio": str(audio_path),
                 "text": text,
-                "duration": len(audio["array"]) / audio["sampling_rate"]
             })
-        
-        # Write JSONL
-        output_path = OUTPUT_DIR / output_file
-        with open(output_path, "w", encoding="utf-8") as f:
-            for sample in samples:
-                f.write(json.dumps(sample, ensure_ascii=False) + "\n")
-        
-        # Calculate hours
-        total_hours = sum(s["duration"] for s in samples) / 3600
-        print(f"  Saved {len(samples)} samples ({total_hours:.1f} hours) to {output_path}")
+    
+    # Write JSONL
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = OUTPUT_DIR / output_jsonl
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for sample in samples:
+            f.write(json.dumps(sample, ensure_ascii=False) + '\n')
+    
+    print(f"  Saved {len(samples)} samples to {output_path}")
+    return len(samples)
+
+
+def main():
+    print("=" * 60)
+    print("Processing Common Voice English for architecture test")
+    print("=" * 60)
+    
+    # Check if corpus exists
+    if not CV_CORPUS_DIR.exists():
+        print(f"\nERROR: Corpus not found at {CV_CORPUS_DIR}")
+        print("\nPlease download Common Voice English from:")
+        print("  https://commonvoice.mozilla.org/en/datasets")
+        print(f"\nExtract to: {CV_CORPUS_DIR.parent}/")
+        print("\nThen run this script again.")
+        return
+    
+    # Find clips directory
+    clips_dir = CV_CORPUS_DIR / "clips"
+    if not clips_dir.exists():
+        print(f"\nERROR: Clips directory not found at {clips_dir}")
+        return
+    
+    print(f"\nFound corpus at: {CV_CORPUS_DIR}")
+    print(f"Clips directory: {clips_dir}")
+    
+    # Process each split
+    total_samples = 0
+    
+    # Train
+    train_tsv = CV_CORPUS_DIR / "train.tsv"
+    if train_tsv.exists():
+        n = process_tsv(train_tsv, "train.jsonl", clips_dir, MAX_TRAIN_SAMPLES)
+        total_samples += n
+    else:
+        print(f"WARNING: {train_tsv} not found")
+    
+    # Validation (dev.tsv in Common Voice)
+    dev_tsv = CV_CORPUS_DIR / "dev.tsv"
+    if dev_tsv.exists():
+        n = process_tsv(dev_tsv, "validation.jsonl", clips_dir, MAX_VAL_SAMPLES)
+        total_samples += n
+    else:
+        print(f"WARNING: {dev_tsv} not found")
+    
+    # Test
+    test_tsv = CV_CORPUS_DIR / "test.tsv"
+    if test_tsv.exists():
+        n = process_tsv(test_tsv, "test.jsonl", clips_dir, MAX_TEST_SAMPLES)
+        total_samples += n
+    else:
+        print(f"WARNING: {test_tsv} not found")
     
     # Create dataset_info.json
     info = {
         "name": "common_voice_en",
         "language": "en",
         "description": "Common Voice English subset for architecture validation",
-        "temporary": True
+        "temporary": True,
+        "source": str(CV_CORPUS_DIR)
     }
     with open(OUTPUT_DIR / "dataset_info.json", "w") as f:
         json.dump(info, f, indent=2)
     
     print("\n" + "=" * 60)
-    print("Done! Dataset saved to:", OUTPUT_DIR)
+    print(f"Done! Processed {total_samples} total samples")
+    print(f"Dataset saved to: {OUTPUT_DIR}")
     print("=" * 60)
-    print("\nNext step: Run training with English config")
+    print("\nNext step: Run training")
     print("  python train.py --config configs/train_config_english_test.yaml")
 
 
 if __name__ == "__main__":
     main()
+
