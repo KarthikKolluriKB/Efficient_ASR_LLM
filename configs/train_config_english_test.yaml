@@ -1,0 +1,131 @@
+# =============================================================================
+# SLAM-ASR Training Configuration - ENGLISH TEST (Architecture Validation)
+# Common Voice English - TEMPORARY TEST
+# =============================================================================
+# PURPOSE: Validate architecture works with sufficient English data
+# DELETE: Remove data/common_voice_en/ after test
+# RUN: python train.py --config configs/train_config_english_test.yaml
+# =============================================================================
+
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+  
+  # LLM - Qwen2.5-3B
+  llm_model_name: qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
+  llm_dim: 2048
+  llm_model_path: null
+  llm_type: decoder_only
+  
+  # Whisper encoder - base multilingual
+  encoder_model_name: whisper-base
+  encoder_model: base
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_dim: 512
+  encoder_num_layers: null
+  
+  # Projector
+  projector: linear
+  projector_ds_rate: 5
+  projector_hidden_dim: 2048
+  projector_dropout: 0.1  # Less dropout - more data available
+  modal: audio
+  normalize: false
+  encoder_type: finetune
+
+train:
+  model_name: ASRLLM
+  run_validation: true
+  
+  # Larger batch - more data allows it
+  batch_size: 16
+  val_batch_size: 64
+  gradient_accumulation_steps: 2  # Effective batch = 32
+  num_workers: 8
+  max_eval_batches: 50
+  max_new_tokens: 128
+  
+  # Generation parameters
+  repetition_penalty: 1.3
+  
+  # Training settings - fewer epochs needed with more data
+  num_epochs: 10  # Should converge faster with 50+ hours
+  total_steps: 100000
+  warmup_steps: 500
+  validation_interval: 500  # Validate every 500 steps
+  
+  # Optimizer - can use higher LR with more data
+  lr: 1.0e-4
+  weight_decay: 0.05
+  grad_clip: 1.0
+  gamma: 0.85
+  
+  # Memory optimization
+  use_fp16: false
+  mixed_precision: true
+  quantization: false
+  
+  # Freeze encoder and LLM, only train projector
+  freeze_llm: true
+  freeze_encoder: true
+  freeze_layers: false
+  num_freeze_layers: 0
+  
+  # Output
+  output_dir: outputs/english_test_validation/
+  save_model: true
+  seed: 42
+  one_gpu: true
+  use_peft: false
+  use_fast_kernels: false
+  batching_strategy: packing
+  context_length: 384
+
+scheduler: 
+  name: cosine_with_warmup
+  total_training_steps: 10000
+  warmup_steps: 500
+
+early_stopping: 
+  monitor: val/wer
+  mode: min 
+  patience: 5  # Faster convergence expected
+  min_delta: 0.01
+
+data:
+  dataset: speech_dataset
+  file: datamodule/dataset.py:get_speech_dataset
+  
+  # English Common Voice paths (temporary test data)
+  train_data_path: data/common_voice_en/train.jsonl
+  val_data_path: data/common_voice_en/validation.jsonl
+  test_data_path: data/common_voice_en/test.jsonl
+  
+  train_split: train
+  val_split: val
+  test_split: test
+  
+  input_type: mel
+  mel_size: 80
+  normalize: false
+  use_variable_length: true
+  max_audio_length: 20
+  fix_length_audio: -1
+  inference_mode: false
+  
+  prompt: null
+  data_path: null
+  max_words: null
+  max_mel: null
+
+log:
+  use_wandb: true
+  wandb_dir: ./wandb
+  wandb_entity_name: null
+  wandb_project_name: SLAM_ASR_Danish
+  wandb_exp_name: english_test_architecture_validation
+  log_dir: ./logs
+  log_filename: train_english_test.log
+  log_interval: 50
