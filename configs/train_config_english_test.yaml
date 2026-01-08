@@ -39,11 +39,11 @@ train:
   model_name: ASRLLM
   run_validation: true
   
-  # Larger batch - more data allows it
-  batch_size: 16
-  val_batch_size: 64
-  gradient_accumulation_steps: 2  # Effective batch = 32
-  num_workers: 8
+  # Reduced batch for shared GPU (other process using 37GB)
+  batch_size: 8
+  val_batch_size: 4
+  gradient_accumulation_steps: 4  # Effective batch = 32
+  num_workers: 4
   max_eval_batches: 50
   max_new_tokens: 128
   
