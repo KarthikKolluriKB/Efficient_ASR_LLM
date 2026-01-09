@@ -115,6 +115,9 @@ data:
   mel_size: 80
   normalize: false
   
+  # CRITICAL: Must match model.projector_ds_rate for correct audio_length calculation!
+  projector_ds_rate: 3
+  
   # Variable length audio
   use_variable_length: true
   max_audio_length: 30       # Max 30 seconds

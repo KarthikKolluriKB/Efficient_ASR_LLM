@@ -52,6 +52,9 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
         self.normalize = getattr(dataset_config, 'normalize', False)
         self.input_type = getattr(dataset_config, 'input_type', 'mel')
         
+        # Projector downsampling rate - MUST match model config!
+        self.projector_ds_rate = getattr(dataset_config, 'projector_ds_rate', 5)
+        
         # Variable length support (important for Common Voice)
         self.use_variable_length = getattr(dataset_config, 'use_variable_length', True)
         self.max_audio_length = getattr(dataset_config, 'max_audio_length', 30)  # seconds
@@ -134,12 +137,12 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
             if self.normalize:
                 audio_raw = torch.nn.functional.layer_norm(audio_raw, audio_raw.shape)
             audio_length = len(audio_raw) // 320  # for fairseq 320x downsample
-            audio_length = audio_length // 5  # for 5x fc downsample
+            audio_length = audio_length // self.projector_ds_rate  # projector downsample
             audio_mel = None
         elif self.input_type == "mel":
             audio_mel, audio_raw = self._compute_mel_spectrogram(audio_raw)
             audio_length = (audio_mel.shape[0] + 1) // 2  # whisper 2x downsample
-            audio_length = audio_length // 5  # 5x fc downsample
+            audio_length = audio_length // self.projector_ds_rate  # projector downsample
             
         if self.fix_length_audio > 0:
             audio_length = self.fix_length_audio
