@@ -56,7 +56,7 @@ train:
   # Minimal train section for compatibility
   model_name: ASRLLM
   batch_size: 8
-  val_batch_size: 8
+  val_batch_size: 32
   num_workers: 4
   output_dir: outputs/slam_asr_english_100h/
   freeze_llm: true
@@ -102,7 +102,7 @@ data:
   max_mel: null
 
 log:
-  use_wandb: false
+  use_wandb: true
   log_dir: ./logs
   log_filename: eval_english_100h.log
   wandb_dir: ./wandb
