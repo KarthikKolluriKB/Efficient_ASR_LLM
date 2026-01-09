@@ -123,7 +123,7 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_English
+  wandb_project_name: SLAM_ASR_English_100h
   wandb_exp_name: english_500h_scaling_test
   log_dir: ./logs
   log_filename: train_english_500h.log
