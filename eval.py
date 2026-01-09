@@ -216,22 +216,33 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
             # Move batch to device
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
-            labels = batch["labels"].to(device)
             audio_mel = batch["audio_mel"].to(device).to(enc_dtype)
             modality_mask = batch["modality_mask"].to(device)
             
-            # Get reference texts from labels
-            ref_texts = []
-            for label in labels:
-                valid_tokens = label[label != -100]
-                if len(valid_tokens) > 0:
-                    ref_text = tokenizer.decode(valid_tokens, skip_special_tokens=True).strip()
-                    ref_texts.append(ref_text)
+            # Get reference texts - handle both training and inference mode
+            if "target" in batch:
+                # Inference mode: target is the reference text directly
+                ref_texts = batch["target"]
+                if isinstance(ref_texts, torch.Tensor):
+                    ref_texts = [str(t) for t in ref_texts]
+            elif "labels" in batch:
+                # Training mode: decode from labels
+                labels = batch["labels"].to(device)
+                ref_texts = []
+                for label in labels:
+                    valid_tokens = label[label != -100]
+                    if len(valid_tokens) > 0:
+                        ref_text = tokenizer.decode(valid_tokens, skip_special_tokens=True).strip()
+                        ref_texts.append(ref_text)
+            else:
+                logger.error("Batch has neither 'target' nor 'labels' - cannot get reference texts")
+                continue
             
-            # Truncate inputs for generation (remove answer)
-            gen_input_ids, gen_attention_mask, gen_modality_mask = truncate_for_generation(
-                input_ids, attention_mask, labels, modality_mask, device
-            )
+            # For generation, we need to know where to truncate
+            # In inference mode, the input already excludes the answer
+            gen_input_ids = input_ids
+            gen_attention_mask = attention_mask
+            gen_modality_mask = modality_mask
             
             # Generate transcriptions
             if use_autocast:
