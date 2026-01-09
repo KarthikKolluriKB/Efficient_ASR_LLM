@@ -307,7 +307,9 @@ def main():
     logger.info(f"Device: {device}")
 
     # Model (ASR + LLM)
-    model, tokenizer = model_builder(cfg.train, cfg.model)
+    # Pass projector_path if specified for loading pretrained projector weights
+    projector_path = getattr(cfg.model, 'projector_path', None)
+    model, tokenizer = model_builder(cfg.train, cfg.model, ckpt_path=projector_path)
     pad_id = resolve_pad_token(tokenizer, model.llm)
     logger.info(f"Resolved pad_token_id: {pad_id}")
 

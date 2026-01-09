@@ -1,0 +1,148 @@
+# =============================================================================
+# SLAM-ASR Training Configuration - DANISH BEST MODEL
+# Optimized for low-resource Danish ASR (~3.5K samples, ~5-7 hours)
+# =============================================================================
+# 
+# KEY OPTIMIZATIONS FOR LOW-RESOURCE:
+#   1. LayerNorm in projector - fixes embedding scale mismatch
+#   2. Whisper-small - better multilingual representations
+#   3. SpecAugment - data augmentation (TODO: implement)
+#   4. Strong regularization - dropout, weight decay
+#   5. Smaller projector - prevents overfitting
+#   6. Lower learning rate - stable training
+#
+# EXPECTED RESULTS: 25-35% WER (limited by data size)
+# WITH CROSS-LINGUAL PRETRAINING: 15-25% WER
+# =============================================================================
+
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+  
+  # LLM - Qwen2.5-3B (multilingual, supports Danish)
+  llm_model_name: qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
+  llm_dim: 2048
+  llm_model_path: null
+  llm_type: decoder_only
+  
+  # Whisper encoder - SMALL for better multilingual representations
+  encoder_model_name: whisper-small
+  encoder_model: small           # Better than base for low-resource
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_dim: 768               # Small = 768 dim
+  encoder_num_layers: null       # Use all 12 layers initially
+  
+  # Projector - SMALLER hidden dim for small dataset
+  projector: linear
+  projector_ds_rate: 5           # 5x downsample (more aggressive for small data)
+  projector_hidden_dim: 512      # Reduced from 2048 to prevent overfitting
+  projector_dropout: 0.3         # High dropout for small dataset
+  modal: audio
+  normalize: false
+  encoder_type: finetune
+
+train:
+  model_name: ASRLLM
+  run_validation: true
+  
+  # Batch settings - small effective batch for small dataset
+  batch_size: 8                  # Smaller batch = more gradient noise (regularization)
+  val_batch_size: 32
+  gradient_accumulation_steps: 2 # Effective batch = 16
+  num_workers: 4
+  max_eval_batches: 100
+  max_new_tokens: 128
+  
+  # Generation parameters
+  repetition_penalty: 1.5
+  
+  # Training settings - many epochs for small data
+  num_epochs: 100                # Small data needs many epochs
+  total_steps: 50000
+  warmup_steps: 500              # ~2 epochs warmup
+  validation_interval: 225       # Every epoch (3592/16=225)
+  
+  # Optimizer - VERY conservative for small data
+  lr: 2.0e-5                     # Very low LR
+  weight_decay: 0.1              # Strong regularization
+  grad_clip: 1.0
+  gamma: 0.85
+  
+  # Memory optimization
+  use_fp16: false
+  mixed_precision: true
+  quantization: false
+  
+  # Freeze encoder and LLM, only train projector
+  freeze_llm: true
+  freeze_encoder: true
+  freeze_layers: false
+  num_freeze_layers: 0
+  
+  # Output
+  output_dir: outputs/slam_asr_danish_best/
+  save_model: true
+  seed: 42
+  one_gpu: true
+  use_peft: false
+  use_fast_kernels: false
+  batching_strategy: packing
+  context_length: 384
+
+scheduler: 
+  name: cosine_with_warmup
+  total_training_steps: 50000
+  warmup_steps: 500
+
+early_stopping: 
+  monitor: val/wer
+  mode: min 
+  patience: 15                   # More patience for small data (noisy gradients)
+  min_delta: 0.005               # 0.5% WER improvement threshold
+
+data:
+  dataset: speech_dataset
+  file: datamodule/dataset.py:get_speech_dataset
+  
+  # Common Voice Danish paths
+  train_data_path: data/common_voice_da/train.jsonl
+  val_data_path: data/common_voice_da/validation.jsonl
+  test_data_path: data/common_voice_da/test.jsonl
+
+  # Audio settings
+  input_type: mel
+  mel_size: 80
+  normalize: false
+  
+  # CRITICAL: Must match model.projector_ds_rate!
+  projector_ds_rate: 5
+  
+  # Variable length audio
+  use_variable_length: true
+  max_audio_length: 20           # Most CV samples are <20s
+  fix_length_audio: -1
+  
+  # Text settings
+  max_target_chars: 500
+  
+  # Data augmentation (TODO: implement SpecAugment)
+  # spec_augment: true
+  # freq_mask_param: 27
+  # time_mask_param: 100
+  # num_freq_masks: 2
+  # num_time_masks: 2
+  
+  inference_mode: false
+
+# Logging
+log:
+  use_wandb: true
+  wandb_dir: ./wandb
+  wandb_entity_name: null
+  wandb_project_name: SLAM_ASR_Danish
+  wandb_exp_name: danish_best_whisper_small_ln
+  log_dir: ./logs
+  log_filename: train_danish_best.log
+  log_interval: 50

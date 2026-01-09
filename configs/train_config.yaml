@@ -119,6 +119,9 @@ data:
   fix_length_audio: -1
   inference_mode: false
   
+  # CRITICAL: Must match model.projector_ds_rate for correct audio_length calculation!
+  projector_ds_rate: 5
+  
   prompt: null
   data_path: null
   max_words: null
