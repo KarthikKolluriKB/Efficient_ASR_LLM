@@ -150,8 +150,15 @@ def run_eval(args):
         logger.info(f"Loading model with checkpoint: {args.ckpt_path}")
         model, tokenizer = model_builder(train_cfg, model_cfg, data_config=data_cfg)
         
-        # Load projector weights
-        projector_state = torch.load(args.ckpt_path, map_location='cpu', weights_only=True)
+        # Load projector weights (handle nested checkpoint format)
+        checkpoint = torch.load(args.ckpt_path, map_location='cpu', weights_only=True)
+        if 'projector' in checkpoint:
+            # Nested format: {"step": ..., "projector": state_dict}
+            projector_state = checkpoint['projector']
+            logger.info(f"Loaded checkpoint from step {checkpoint.get('step', 'unknown')}")
+        else:
+            # Direct state_dict format
+            projector_state = checkpoint
         model.projector.load_state_dict(projector_state)
         logger.info("Loaded projector weights successfully")
         
