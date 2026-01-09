@@ -473,6 +473,7 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
     global_step = 0
     best_val_loss = float("inf")
     best_val_wer = float("inf")
+    best_train_wer = float("inf")
     best_val_path = None
     training_start_time = time.time()  # Total training time
     log_interval_start = time.time()   # Per-interval timing
@@ -567,6 +568,10 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
                 elapsed = time.time() - log_interval_start
                 lr = optimizer.param_groups[0]["lr"]
                 
+                # Track best training WER
+                if batch_wer < best_train_wer:
+                    best_train_wer = batch_wer
+                
                 # Log memory usage for debugging
                 allocated, reserved, max_alloc = log_gpu_memory(logger, global_step, prefix="")
                 
@@ -637,7 +642,16 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
     logger.info("Training completed.....")
     total_training_time = (time.time() - training_start_time) / 60
     logger.info("Training Time: {:.2f} minutes ({:.2f} hours)".format(total_training_time, total_training_time / 60))
-    logger.info(f"Best validation wer: {best_val_wer:.4f}")
+    
+    # Print summary for Excel reporting
+    logger.info("=" * 60)
+    logger.info("TRAINING SUMMARY (for Excel reporting)")
+    logger.info("=" * 60)
+    logger.info(f"Best Training WER: {best_train_wer:.4f} ({best_train_wer*100:.2f}%)")
+    logger.info(f"Best Validation WER: {best_val_wer:.4f} ({best_val_wer*100:.2f}%)")
+    logger.info(f"Total Training Time: {total_training_time:.2f} min ({total_training_time/60:.2f} hours)")
+    logger.info("=" * 60)
+    
     if best_val_path:
         logger.info(f"Best projector model saved to: {best_val_path}")
 
