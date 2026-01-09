@@ -361,16 +361,22 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate ASR-LLM model on test set")
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to the config file (alternative to --cfg_path).",
+    )
+    parser.add_argument(
         "--cfg_path",
         type=str,
-        required=True,
+        default=None,
         help="Path to the config file.",
     )
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        required=True,
-        help="Path to the model checkpoint (projector weights).",
+        default=None,
+        help="Path to the model checkpoint (projector weights). If not provided, uses eval.projector_path from config.",
     )
     parser.add_argument(
         "--batch_size",
@@ -414,7 +420,32 @@ def parse_args():
         default=1.3,
         help="Repetition penalty for generation.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    
+    # Handle --config as alias for --cfg_path
+    if args.config and not args.cfg_path:
+        args.cfg_path = args.config
+    
+    # Validate cfg_path is provided
+    if not args.cfg_path:
+        parser.error("--config or --cfg_path is required")
+    
+    # If ckpt_path not provided, load from config
+    if not args.ckpt_path:
+        cfg = OmegaConf.load(args.cfg_path)
+        if hasattr(cfg, 'eval') and hasattr(cfg.eval, 'projector_path'):
+            args.ckpt_path = cfg.eval.projector_path
+            print(f"Using projector_path from config: {args.ckpt_path}")
+        else:
+            parser.error("--ckpt_path is required (or set eval.projector_path in config)")
+    
+    # Load output_dir from config if not specified
+    if args.output_dir == "eval_results":
+        cfg = OmegaConf.load(args.cfg_path)
+        if hasattr(cfg, 'eval') and hasattr(cfg.eval, 'output_dir'):
+            args.output_dir = cfg.eval.output_dir
+    
+    return args
 
 
 if __name__ == "__main__":
