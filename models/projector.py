@@ -9,6 +9,10 @@ class EncoderProjectorConcat(nn.Module):
     - Concatenates k consecutive frames: [B, T//k, encoder_dim*k]
     - Projects to LLM dimension: [B, T//k, llm_dim]
     
+    CRITICAL: LayerNorm is essential to match text embedding distribution!
+    Without it, projected audio has 10-100x larger magnitude than text embeddings,
+    causing the frozen LLM to receive out-of-distribution inputs.
+    
     For small datasets (<10K samples), use hidden_dim=512 to reduce overfitting.
     For large datasets (>100K samples), use hidden_dim=2048.
     
@@ -31,6 +35,11 @@ class EncoderProjectorConcat(nn.Module):
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(p=dropout_rate)
         self.linear2 = nn.Linear(self.hidden_dim, config.llm_dim)
+        
+        # CRITICAL: LayerNorm to match text embedding distribution
+        # Text embeddings from LLM have norm ~2.5, without this audio embeddings
+        # have norm 30-200x which causes severe distribution mismatch
+        self.layer_norm = nn.LayerNorm(config.llm_dim, eps=1e-5)
 
     def forward(self, x):
         batch_size, seq_len, dim = x.size()
@@ -45,10 +54,15 @@ class EncoderProjectorConcat(nn.Module):
         x = self.relu(x)
         x = self.dropout(x)  # Apply dropout after activation
         x = self.linear2(x)
+        x = self.layer_norm(x)  # Normalize to match text embedding scale
         return x
     
 
 class EncoderProjectorCov1d(nn.Module):
+    """
+    Conv1D projector with strided convolution for downsampling.
+    Uses LayerNorm to match text embedding distribution.
+    """
     def __init__(self, config):
         super().__init__()
         self.k = config.projector_ds_rate
@@ -58,7 +72,8 @@ class EncoderProjectorCov1d(nn.Module):
         self.linear1 = nn.Linear(self.encoder_dim, 2048)
         self.relu1 = nn.ReLU()
         self.linear2 = nn.Linear(2048, self.llm_dim)
-        self.relu2 = nn.ReLU()
+        # CRITICAL: LayerNorm to match text embedding distribution
+        self.layer_norm = nn.LayerNorm(self.llm_dim, eps=1e-5)
     
     def forward(self, x):
         x = x.transpose(1, 2)
@@ -66,8 +81,8 @@ class EncoderProjectorCov1d(nn.Module):
         x = x.transpose(1, 2)
         x = self.relu1(x)
         x = self.linear1(x)
-        x = self.relu2(x)
         x = self.linear2(x)
+        x = self.layer_norm(x)  # Normalize to match text embedding scale
         return x
 
 class EncoderProjectorQFormer(nn.Module):

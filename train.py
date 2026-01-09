@@ -472,7 +472,8 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
     best_val_loss = float("inf")
     best_val_wer = float("inf")
     best_val_path = None
-    start_time = time.time()
+    training_start_time = time.time()  # Total training time
+    log_interval_start = time.time()   # Per-interval timing
     model.train()
 
     logger.info("Starting training...")
@@ -561,7 +562,7 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
                 torch.cuda.empty_cache()
 
             if global_step % cfg.log.log_interval == 0: 
-                elapsed = time.time() - start_time
+                elapsed = time.time() - log_interval_start
                 lr = optimizer.param_groups[0]["lr"]
                 
                 # Log memory usage for debugging
@@ -581,8 +582,8 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
                         "train/gpu_allocated_gb": allocated,
                         "train/gpu_reserved_gb": reserved,
                     }, step=global_step)
-                # Reset start time
-                start_time = time.time()
+                # Reset interval timer (not total training time)
+                log_interval_start = time.time()
 
 
         # Validation at the end of each epoch
@@ -632,7 +633,8 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
 
     # End of training     
     logger.info("Training completed.....")
-    logger.info("Training Time: {:.2f} minutes".format((time.time() - start_time) / 60))
+    total_training_time = (time.time() - training_start_time) / 60
+    logger.info("Training Time: {:.2f} minutes ({:.2f} hours)".format(total_training_time, total_training_time / 60))
     logger.info(f"Best validation wer: {best_val_wer:.4f}")
     if best_val_path:
         logger.info(f"Best projector model saved to: {best_val_path}")

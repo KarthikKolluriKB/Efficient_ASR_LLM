@@ -1,0 +1,97 @@
+# =============================================================================
+# SLAM-ASR Evaluation Configuration (Generation-based)
+# Evaluate trained model on test set using actual generation
+# =============================================================================
+# Usage: python eval.py --cfg_path configs/eval_config_v2.yaml --ckpt_path outputs/ASRLLM_enc_lin_20h/projector_best_wer.pt
+# =============================================================================
+
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+  
+  # LLM - must match training config
+  llm_model_name: qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
+  llm_dim: 2048
+  llm_model_path: null
+  llm_type: decoder_only
+  
+  # Whisper encoder - must match training config
+  encoder_model_name: whisper-base
+  encoder_model: base
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_dim: 512
+  encoder_num_layers: null  # Number of encoder layers (null = all 6, must match training)
+  
+  # Projector - must match training config
+  projector: linear
+  projector_ds_rate: 5
+  projector_hidden_dim: 1024  # Must match training
+  projector_dropout: 0.0  # No dropout during eval
+  modal: audio
+  normalize: false
+  encoder_type: finetune
+
+eval:
+  # Evaluation settings
+  batch_size: 8
+  num_workers: 4
+  
+  # Generation settings (used if not overridden by CLI args)
+  max_new_tokens: 128
+  num_beams: 1
+  temperature: 1.0
+  do_sample: false
+  
+  # Output
+  output_dir: eval_results/
+  save_predictions: true
+
+train:
+  # Minimal train section for model_builder compatibility
+  model_name: ASRLLM
+  batch_size: 8
+  val_batch_size: 8
+  num_workers: 4
+  output_dir: outputs/eval_temp/
+  freeze_llm: true
+  freeze_encoder: true
+  mixed_precision: true
+  one_gpu: true
+
+data:
+  dataset: speech_dataset
+  file: datamodule/dataset.py:get_speech_dataset
+  
+  # Common Voice Danish paths
+  train_data_path: data/common_voice_da/train.jsonl
+  val_data_path: data/common_voice_da/validation.jsonl
+  test_data_path: data/common_voice_da/test.jsonl
+  
+  train_split: train
+  val_split: val
+  test_split: test
+  
+  # Audio settings
+  input_type: mel
+  mel_size: 80
+  normalize: false
+  use_variable_length: true
+  max_audio_length: 30
+  fix_length_audio: -1
+  inference_mode: true  # Important: no augmentation during eval
+  
+  prompt: null
+  data_path: null
+  max_words: null
+  max_mel: null
+
+log:
+  use_wandb: true
+  log_dir: ./logs
+  log_filename: eval.log
+  wandb_dir: ./wandb
+  wandb_entity_name: null
+  wandb_project_name: SLAM_ASR_Eval
+  wandb_exp_name: eval_test
