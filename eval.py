@@ -220,9 +220,9 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
             modality_mask = batch["modality_mask"].to(device)
             
             # Get reference texts - handle both training and inference mode
-            if "target" in batch:
-                # Inference mode: target is the reference text directly
-                ref_texts = batch["target"]
+            if "targets" in batch:
+                # Inference mode: targets is the reference text list directly
+                ref_texts = batch["targets"]
                 if isinstance(ref_texts, torch.Tensor):
                     ref_texts = [str(t) for t in ref_texts]
             elif "labels" in batch:
