@@ -38,10 +38,10 @@ train:
   model_name: ASRLLM
   run_validation: true
   
-  # Batch settings - same as 100h
-  batch_size: 64
-  val_batch_size: 16
-  gradient_accumulation_steps: 2   # Effective batch = 64
+  # Batch settings - REDUCED to prevent OOM
+  batch_size: 32             # Reduced from 64 to prevent OOM
+  val_batch_size: 8          # Reduced from 16
+  gradient_accumulation_steps: 4   # Increased to maintain effective batch = 128
   num_workers: 4
   max_eval_batches: 100
   max_new_tokens: 128

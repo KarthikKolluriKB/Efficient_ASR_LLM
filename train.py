@@ -2,6 +2,7 @@ import os
 import time 
 import argparse 
 import gc
+import math
 
 from dotenv import load_dotenv
 load_dotenv()  # Load environment variables from .env file (including WANDB_API_KEY)
@@ -12,6 +13,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import torch 
 from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
 from omegaconf import OmegaConf
 
 # internal imports
@@ -336,6 +338,32 @@ def main():
 
     logger.info(f"Model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters")
 
+    # Learning rate scheduler (cosine with warmup)
+    scheduler = None
+    if hasattr(cfg, 'scheduler') and cfg.scheduler is not None:
+        scheduler_name = cfg.scheduler.get('name', 'cosine_with_warmup')
+        warmup_steps = cfg.scheduler.get('warmup_steps', cfg.train.get('warmup_steps', 0))
+        total_steps = cfg.scheduler.get('total_training_steps', cfg.train.get('total_steps', 10000))
+        min_lr_ratio = cfg.scheduler.get('min_lr_ratio', 0.1)  # Final LR = initial_lr * min_lr_ratio
+        
+        if scheduler_name == 'cosine_with_warmup':
+            def lr_lambda(current_step):
+                # Warmup phase: linear increase from 0 to 1
+                if current_step < warmup_steps:
+                    return float(current_step) / float(max(1, warmup_steps))
+                # Cosine decay phase: from 1 to min_lr_ratio
+                progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+                cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+                return min_lr_ratio + (1.0 - min_lr_ratio) * cosine_decay
+            
+            scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
+            logger.info(f"LR Scheduler: {scheduler_name} | warmup={warmup_steps} | total_steps={total_steps} | min_lr_ratio={min_lr_ratio}")
+        elif scheduler_name == 'cosine':
+            scheduler = CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=cfg.train.lr * min_lr_ratio)
+            logger.info(f"LR Scheduler: cosine | T_max={total_steps} | eta_min={cfg.train.lr * min_lr_ratio:.2e}")
+        else:
+            logger.warning(f"Unknown scheduler '{scheduler_name}', no scheduling will be used")
+
     # Log encoder efficiency metrics
     num_layers = getattr(cfg.model, 'encoder_num_layers', None)
     encoder_params = count_encoder_parameters(model.encoder, num_layers=num_layers)
@@ -551,6 +579,10 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
                     clip_grad_norm_(projector_params, cfg.train.grad_clip)
                 optimizer.step()
 
+            # Step the learning rate scheduler
+            if scheduler is not None:
+                scheduler.step()
+
             # Store loss value BEFORE deleting tensors (for logging)
             loss_value = loss.item()
 
@@ -559,10 +591,10 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
             del input_ids, attention_mask, labels, audio_mel, modality_mask
             del outputs, loss
             
-            # Force garbage collection every 10 steps
-            if global_step % 10 == 0:
-                gc.collect()
-                torch.cuda.empty_cache()
+            # Force garbage collection EVERY step to prevent memory fragmentation
+            # This is critical for long training runs with large vocabularies
+            gc.collect()
+            torch.cuda.empty_cache()
 
             if global_step % cfg.log.log_interval == 0: 
                 elapsed = time.time() - log_interval_start

@@ -160,6 +160,11 @@ class ASRLLM(nn.Module):
         
         # Initialize metric flag for accuracy computation
         self.metric = kwargs.get("metric", True)  # Default to True if not specified
+        
+        # Label smoothing for regularization (reduces overconfidence)
+        self.label_smoothing = getattr(train_config, 'label_smoothing', 0.0)
+        if self.label_smoothing > 0:
+            logger.info(f"Label smoothing enabled: {self.label_smoothing}")
 
 
     def forward(
@@ -304,43 +309,74 @@ class ASRLLM(nn.Module):
         
         # Default path for training / evaluation
         # Explicitly disable KV cache to prevent memory accumulation during training
-        model_outputs = self.llm(
-            inputs_embeds=inputs_embeds, 
-            attention_mask=attention_mask, 
-            labels=labels,  # Can be None during eval to skip loss computation
-            use_cache=False  # Critical: prevents KV cache memory accumulation
-        )
+        
+        # If label smoothing is enabled, compute loss ourselves
+        if self.label_smoothing > 0 and labels is not None:
+            # Get logits without loss computation
+            model_outputs = self.llm(
+                inputs_embeds=inputs_embeds, 
+                attention_mask=attention_mask, 
+                labels=None,  # Don't compute loss in LLM
+                use_cache=False
+            )
+            
+            # Compute loss with label smoothing
+            logits = model_outputs.logits
+            # Shift for causal LM: predict next token
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            
+            # Flatten for cross entropy
+            loss_fct = CrossEntropyLoss(
+                ignore_index=-100, 
+                label_smoothing=self.label_smoothing
+            )
+            loss = loss_fct(
+                shift_logits.view(-1, shift_logits.size(-1)), 
+                shift_labels.view(-1)
+            )
+            
+            # Replace the loss in model_outputs
+            model_outputs.loss = loss
+        else:
+            model_outputs = self.llm(
+                inputs_embeds=inputs_embeds, 
+                attention_mask=attention_mask, 
+                labels=labels,  # Can be None during eval to skip loss computation
+                use_cache=False  # Critical: prevents KV cache memory accumulation
+            )
 
         # Metrics (computed on CPU to prevent GPU memory accumulation)
         # Skip metrics when labels=None (eval mode skips loss computation to save memory)
         metrics = {}
         if self.metric and labels is not None:
             with torch.no_grad():
-                # Compute token accuracy - move to CPU immediately
-                preds = torch.argmax(model_outputs.logits.detach(), dim=-1).cpu()
+                # Move logits to CPU ONCE and delete GPU copy immediately
+                logits_cpu = model_outputs.logits.detach().cpu()
                 labels_cpu = labels.detach().cpu()
+                
+                # Compute token accuracy
+                preds = torch.argmax(logits_cpu, dim=-1)
                 acc = compute_accuracy(preds[:, :-1], labels_cpu[:, 1:], ignore_label=-100)
                 metrics["acc"] = float(acc.item())
 
                 # Compute WER (batch-level average) - use CPU tensors
-                if hasattr(model_outputs, "logits"):
-                    # First decode the texts using decode_texts_from_outputs (CPU)
-                    hyp_texts, ref_texts = decode_texts_from_outputs(
-                        logits=model_outputs.logits.detach().cpu(),
-                        labels=labels_cpu,
-                        tokenizer=self.tokenizer,
-                        ignore_label=-100
-                    )
-                    
-                    # Then compute WER using the decoded texts
-                    wer_score = compute_wer(
-                        hyp_texts=hyp_texts,
-                        ref_texts=ref_texts
-                    )
-                    metrics["wer"] = float(wer_score)
+                hyp_texts, ref_texts = decode_texts_from_outputs(
+                    logits=logits_cpu,
+                    labels=labels_cpu,
+                    tokenizer=self.tokenizer,
+                    ignore_label=-100
+                )
+                
+                # Then compute WER using the decoded texts
+                wer_score = compute_wer(
+                    hyp_texts=hyp_texts,
+                    ref_texts=ref_texts
+                )
+                metrics["wer"] = float(wer_score)
                 
                 # Explicitly delete CPU tensors to free memory
-                del preds, labels_cpu
+                del preds, labels_cpu, logits_cpu
 
         return model_outputs, metrics
     

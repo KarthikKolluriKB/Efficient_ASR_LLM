@@ -27,7 +27,7 @@ model:
   projector: linear
   projector_ds_rate: 3
   projector_hidden_dim: 2048
-  projector_dropout: 0.1
+  projector_dropout: 0.2  # Increased from 0.1 for regularization
   projector_path: outputs/slam_asr_english_100h/projector_best_wer.pt
   
   modal: audio
@@ -59,6 +59,7 @@ train:
   weight_decay: 0.1
   grad_clip: 1.0
   gamma: 0.85
+  label_smoothing: 0.1  # Regularization to prevent overconfidence
   
   # Memory
   mixed_precision: true
@@ -85,6 +86,7 @@ scheduler:
   name: cosine_with_warmup
   total_training_steps: 25000
   warmup_steps: 250
+  min_lr_ratio: 0.1  # Final LR = initial_lr * 0.1 = 5e-7
 
 early_stopping:
   monitor: val/wer
