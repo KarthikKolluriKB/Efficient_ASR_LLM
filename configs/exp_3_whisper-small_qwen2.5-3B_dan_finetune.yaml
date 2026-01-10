@@ -73,7 +73,7 @@ train:
   num_freeze_layers: 0
   
   # Output
-  output_dir: outputs/exp_2_dan_finetune/
+  output_dir: outputs/exp_3_whisper-small_qwen2.5-3B_dan_finetune/
   save_model: true
   seed: 42
   one_gpu: true
@@ -121,7 +121,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_Danish
-  wandb_exp_name: exp_2_whisper-small_qwen2.5-3B_dan_finetune
+  wandb_exp_name: exp_3_whisper-small_qwen2.5-3B_dan_finetune
   log_dir: ./logs
-  log_filename: exp_2_dan_finetune.log
+  log_filename: exp_3_whisper-small_qwen2.5-3B_dan_finetune.log
   log_interval: 50
