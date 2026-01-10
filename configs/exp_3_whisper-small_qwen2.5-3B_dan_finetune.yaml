@@ -38,8 +38,8 @@ train:
   run_validation: true
   
   # Batch settings
-  batch_size: 8
-  val_batch_size: 32
+  batch_size: 32
+  val_batch_size: 8
   gradient_accumulation_steps: 2
   num_workers: 4
   max_eval_batches: 100
