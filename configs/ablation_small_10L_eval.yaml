@@ -1,0 +1,85 @@
+# =============================================================================
+# Evaluation Config: Whisper-small with 10 Encoder Layers
+# SLAM-ASR ablation study evaluation
+# =============================================================================
+
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+  
+  # LLM - Qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
+  llm_model_name: qwen2.5-3B
+  llm_dim: 2048
+  llm_model_path: null
+  llm_type: decoder_only
+  
+  # Encoder - Whisper-small with 10 layers
+  encoder_model: small
+  encoder_model_name: whisper-small
+  encoder_dim: 768
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_num_layers: 10  # Must match training config
+  encoder_type: finetune
+  
+  # Projector - load trained weights
+  projector: linear
+  projector_ds_rate: 3
+  projector_hidden_dim: 2048
+  projector_dropout: 0.1
+  projector_path: outputs/ablation_small_10L/projector_best_wer.pt
+  
+  modal: audio
+  normalize: false
+
+eval:
+  model_name: ASRLLM
+  projector_path: outputs/ablation_small_10L/projector_best_wer.pt
+  
+  # Batch settings
+  batch_size: 8
+  num_workers: 4
+  
+  # Generation
+  max_new_tokens: 256
+  repetition_penalty: 1.5
+  
+  # Memory
+  mixed_precision: true
+  use_fp16: false
+  quantization: false
+  
+  # Freeze everything
+  freeze_llm: true
+  freeze_encoder: true
+  
+  # Output
+  output_dir: outputs/ablation_small_10L/
+  results_file: eval_results.json
+  seed: 42
+
+data:
+  dataset: speech_dataset
+  file: datamodule/dataset.py:get_speech_dataset
+  
+  # Danish Common Voice test set
+  test_data_path: data/common_voice_da/test.jsonl
+  
+  # Audio
+  input_type: mel
+  mel_size: 80
+  normalize: false
+  projector_ds_rate: 3
+  use_variable_length: true
+  max_audio_length: 20
+  fix_length_audio: -1
+  
+  # Text
+  max_target_chars: 500
+  inference_mode: true
+
+log:
+  use_wandb: false
+  log_dir: ./logs
+  log_filename: eval_ablation_small_10L.log
