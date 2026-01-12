@@ -54,8 +54,8 @@ train:
   warmup_steps: 500
   validation_interval: 225  # ~1 epoch (3592/16)
   
-  # Optimizer (fixed - matching English 100h working config)
-  lr: 5.0e-5              # Increased from 2e-5
+  # Optimizer (updated for SLAM-ASR best practice)
+  lr: 1.0e-4              # Increased to match SLAM-ASR paper
   weight_decay: 0.01      # Reduced from 0.1
   grad_clip: 1.0
   gamma: 0.85
