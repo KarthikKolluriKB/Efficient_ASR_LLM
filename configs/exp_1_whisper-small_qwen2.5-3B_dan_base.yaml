@@ -54,9 +54,9 @@ train:
   warmup_steps: 500
   validation_interval: 225  # ~1 epoch (3592/16)
   
-  # Optimizer
-  lr: 2.0e-5
-  weight_decay: 0.1
+  # Optimizer (fixed - matching English 100h working config)
+  lr: 5.0e-5              # Increased from 2e-5
+  weight_decay: 0.01      # Reduced from 0.1
   grad_clip: 1.0
   gamma: 0.85
   

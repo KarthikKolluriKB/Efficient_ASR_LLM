@@ -55,8 +55,8 @@ train:
   validation_interval: 225  # ~1 epoch
   
   # Optimizer - lower LR for fine-tuning pretrained weights
-  lr: 5.0e-6  # 4x lower than baseline
-  weight_decay: 0.1
+  lr: 1.0e-5              # Lower for fine-tuning (was 5e-6, slightly increased)
+  weight_decay: 0.01      # Reduced from 0.1
   grad_clip: 1.0
   gamma: 0.85
   label_smoothing: 0.1  # Regularization to prevent overconfidence
