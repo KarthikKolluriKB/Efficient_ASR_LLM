@@ -1,0 +1,110 @@
+# =============================================================================
+# SLAM-ASR Evaluation Configuration - Whisper-base Encoder
+# Danish Baseline (Train from Scratch)
+# =============================================================================
+# Usage: python eval.py --config configs/eval_exp_1_whisper-base_qwen2.5-3B_dan_base.yaml
+# =============================================================================
+
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+  
+  # LLM - must match training config
+  llm_model_name: qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
+  llm_dim: 2048
+  llm_model_path: null
+  llm_type: decoder_only
+  
+  # Whisper encoder - must match training config (whisper-base)
+  encoder_model_name: whisper-base
+  encoder_model: base
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_dim: 512            # whisper-base uses 512
+  encoder_num_layers: null    # Use all 12 layers
+  encoder_type: finetune
+  
+  # Projector - must match training config exactly!
+  projector: linear
+  projector_ds_rate: 3
+  projector_hidden_dim: 2048
+  projector_dropout: 0.1      # Matches training config
+  modal: audio
+  normalize: false
+
+eval:
+  # Path to trained projector weights
+  projector_path: outputs/exp_1_whisper-base_qwen2.5-3B_dan_base/projector_best_wer.pt
+  
+  # Evaluation settings
+  batch_size: 32
+  num_workers: 4
+  
+  # Generation settings
+  max_new_tokens: 128
+  num_beams: 1
+  temperature: 1.0
+  do_sample: false
+  repetition_penalty: 1.5     # Matches training config
+  
+  # Output
+  output_dir: outputs/exp_1_whisper-base_qwen2.5-3B_dan_base/eval/
+  save_predictions: true
+
+train:
+  # Minimal train section for compatibility
+  model_name: ASRLLM
+  batch_size: 32
+  val_batch_size: 32
+  num_workers: 4
+  output_dir: outputs/exp_1_whisper-base_qwen2.5-3B_dan_base/
+  freeze_llm: true
+  freeze_encoder: true
+  mixed_precision: true
+  one_gpu: true
+  max_new_tokens: 128
+  repetition_penalty: 1.5
+  quantization: false
+  use_peft: false
+
+data:
+  dataset: speech_dataset
+  file: datamodule/dataset.py:get_speech_dataset
+  
+  # Danish Common Voice paths
+  train_data_path: data/common_voice_da/train.jsonl
+  val_data_path: data/common_voice_da/validation.jsonl
+  test_data_path: data/common_voice_da/test.jsonl
+  
+  train_split: train
+  val_split: val
+  test_split: test
+  
+  # Audio settings - must match training
+  input_type: mel
+  mel_size: 80
+  normalize: false
+  projector_ds_rate: 3        # Must match model.projector_ds_rate
+  
+  # Variable length audio
+  use_variable_length: true
+  max_audio_length: 20
+  fix_length_audio: -1
+  
+  # Text settings
+  max_target_chars: 500
+  inference_mode: true
+  
+  prompt: null
+  data_path: null
+
+log:
+  use_wandb: false
+  wandb_dir: ./wandb
+  wandb_entity_name: null
+  wandb_project_name: SLAM_ASR_Danish
+  wandb_exp_name: eval_exp_1_whisper-base_qwen2.5-3B_dan_base
+  log_dir: ./logs
+  log_filename: eval_exp_1_whisper-base_qwen2.5-3B_dan_base.log
+  log_interval: 50
