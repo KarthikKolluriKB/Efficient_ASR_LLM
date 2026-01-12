@@ -2,84 +2,109 @@
 # Evaluation Config: Whisper-small with 8 Encoder Layers
 # SLAM-ASR ablation study evaluation
 # =============================================================================
+# Usage: python eval.py --config configs/ablation_small_8L_eval.yaml
+# =============================================================================
 
 model:
   model_name: ASRLLM
   file: models/model.py:ASRLLM
   
-  # LLM - Qwen2.5-3B
-  llm_model: Qwen/Qwen2.5-3B
+  # LLM - must match training config
   llm_model_name: qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
   llm_dim: 2048
   llm_model_path: null
   llm_type: decoder_only
   
   # Encoder - Whisper-small with 8 layers
-  encoder_model: small
   encoder_model_name: whisper-small
-  encoder_dim: 768
+  encoder_model: small
   encoder_ds_rate: 2
   encoder_model_path: null
+  encoder_dim: 768
   encoder_num_layers: 8  # Must match training config
   encoder_type: finetune
   
-  # Projector - load trained weights
+  # Projector - must match training config exactly!
   projector: linear
   projector_ds_rate: 3
   projector_hidden_dim: 2048
   projector_dropout: 0.1
-  projector_path: outputs/ablation_small_8L/projector_best_wer.pt
-  
   modal: audio
   normalize: false
 
 eval:
-  model_name: ASRLLM
+  # Path to trained projector weights
   projector_path: outputs/ablation_small_8L/projector_best_wer.pt
   
-  # Batch settings
-  batch_size: 8
+  # Evaluation settings
+  batch_size: 32
   num_workers: 4
   
-  # Generation
+  # Generation settings
   max_new_tokens: 256
+  num_beams: 1
+  temperature: 1.0
+  do_sample: false
   repetition_penalty: 1.5
   
-  # Memory
-  mixed_precision: true
-  use_fp16: false
-  quantization: false
-  
-  # Freeze everything
+  # Output
+  output_dir: outputs/ablation_small_8L/eval/
+  save_predictions: true
+
+train:
+  # Minimal train section for compatibility
+  model_name: ASRLLM
+  batch_size: 32
+  val_batch_size: 32
+  num_workers: 4
+  output_dir: outputs/ablation_small_8L/
   freeze_llm: true
   freeze_encoder: true
-  
-  # Output
-  output_dir: outputs/ablation_small_8L/
-  results_file: eval_results.json
-  seed: 42
+  mixed_precision: true
+  one_gpu: true
+  max_new_tokens: 256
+  repetition_penalty: 1.5
+  quantization: false
+  use_peft: false
 
 data:
   dataset: speech_dataset
   file: datamodule/dataset.py:get_speech_dataset
   
-  # Danish Common Voice test set
+  # Danish Common Voice paths
+  train_data_path: data/common_voice_da/train.jsonl
+  val_data_path: data/common_voice_da/validation.jsonl
   test_data_path: data/common_voice_da/test.jsonl
   
-  # Audio
+  train_split: train
+  val_split: val
+  test_split: test
+  
+  # Audio settings - must match training
   input_type: mel
   mel_size: 80
   normalize: false
   projector_ds_rate: 3
+  
+  # Variable length audio
   use_variable_length: true
   max_audio_length: 20
   fix_length_audio: -1
   
-  # Text
+  # Text settings
   max_target_chars: 500
   inference_mode: true
+  
+  prompt: null
+  data_path: null
 
 log:
   use_wandb: false
+  wandb_dir: ./wandb
+  wandb_entity_name: null
+  wandb_project_name: SLAM_ASR_Danish
+  wandb_exp_name: eval_ablation_small_8L
   log_dir: ./logs
   log_filename: eval_ablation_small_8L.log
+  log_interval: 50
