@@ -38,7 +38,7 @@ eval:
   projector_path: outputs/ablation_small_10L/projector_best_wer.pt
   
   # Batch settings
-  batch_size: 8
+  batch_size: 32
   num_workers: 4
   
   # Generation

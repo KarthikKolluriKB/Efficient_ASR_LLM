@@ -38,7 +38,7 @@ eval:
   projector_path: outputs/exp_3_whisper-small_qwen2.5-3B_dan_finetune/projector_best_wer.pt
   
   # Evaluation settings
-  batch_size: 32
+  batch_size: 16
   num_workers: 4
   
   # Generation settings
@@ -55,8 +55,8 @@ eval:
 train:
   # Minimal train section for compatibility
   model_name: ASRLLM
-  batch_size: 32
-  val_batch_size: 32
+  batch_size: 16
+  val_batch_size: 16
   num_workers: 4
   output_dir: outputs/exp_3_whisper-small_qwen2.5-3B_dan_finetune/
   freeze_llm: true
