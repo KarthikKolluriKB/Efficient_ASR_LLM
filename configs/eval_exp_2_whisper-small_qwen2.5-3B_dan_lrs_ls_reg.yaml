@@ -35,7 +35,7 @@ model:
 
 eval:
   # Path to trained projector weights
-  projector_path: outputs/exp_1_dan_base/projector_best_wer.pt
+  projector_path: outputs/exp_2_dan_lrs_ls_reg/projector_best_wer.pt
   
   # Evaluation settings
   batch_size: 32
@@ -49,7 +49,7 @@ eval:
   repetition_penalty: 1.5     # Matches training config
   
   # Output
-  output_dir: outputs/exp_1_dan_base/eval/
+  output_dir: outputs/exp_2_dan_lrs_ls_reg/eval/
   save_predictions: true
 
 train:
@@ -58,7 +58,7 @@ train:
   batch_size: 32
   val_batch_size: 32
   num_workers: 4
-  output_dir: outputs/exp_1_dan_base/
+  output_dir: outputs/exp_2_dan_lrs_ls_reg/
   freeze_llm: true
   freeze_encoder: true
   mixed_precision: true
