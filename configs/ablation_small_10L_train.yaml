@@ -54,11 +54,11 @@ train:
   warmup_steps: 500
   validation_interval: 225
   
-  # Optimizer (fixed - matching English 100h config)
-  lr: 5.0e-5              # Increased from 2e-5 (was too low)
-  weight_decay: 0.01      # Reduced from 0.1 (was over-regularizing)
+  # Optimizer (ablation study config)
+  lr: 1.0e-4              # Standard ablation learning rate
+  weight_decay: 0.01      # Light regularization
   grad_clip: 1.0
-  gamma: 0.85
+  gamma: 0.9              # Slightly higher for smoother decay
   
   # Memory
   mixed_precision: true
