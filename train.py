@@ -22,7 +22,7 @@ from utils.log_config import get_logger
 from utils.wand_config import init_wandb
 from models.model import model_builder
 from datamodule.dataset import get_speech_dataset
-from utils.metrics import decode_texts_from_outputs, compute_wer, count_encoder_parameters
+from utils.metrics import decode_texts_from_outputs, compute_wer, compute_cer, count_encoder_parameters
 from utils.train_utils import print_model_size, print_module_size, save_and_print_examples
 import sys
 
@@ -89,6 +89,7 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     total_loss, n_batches = 0.0, 0
     all_accuracies = []
     all_wer_scores = []
+    all_cer_scores = []
     all_hyp_texts, all_ref_texts = [], []
     
     use_autocast = bool(cfg.train.mixed_precision and getattr(device, "type", str(device)) == "cuda")
@@ -247,7 +248,9 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
                 
                 if batch_hyp and batch_ref:
                     batch_wer = compute_wer(batch_hyp, batch_ref)
+                    batch_cer = compute_cer(batch_hyp, batch_ref)
                     all_wer_scores.append(batch_wer)
+                    all_cer_scores.append(batch_cer)
                     all_hyp_texts.extend(batch_hyp)
                     all_ref_texts.extend(batch_ref)
             
@@ -272,12 +275,13 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     val_loss = total_loss / max(n_batches, 1)
     val_acc = sum(all_accuracies) / max(len(all_accuracies), 1) if all_accuracies else 0.0
     val_wer_score = sum(all_wer_scores) / max(len(all_wer_scores), 1) if all_wer_scores else 1.0
+    val_cer_score = sum(all_cer_scores) / max(len(all_cer_scores), 1) if all_cer_scores else 1.0
     val_word_acc = 1.0 - val_wer_score if val_wer_score <= 1.0 else 0.0
     
     # Reset model to training mode
     model.train()
     
-    return val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts
+    return val_loss, val_acc, val_wer_score, val_cer_score, val_word_acc, all_hyp_texts, all_ref_texts
 
 
 def main(): 
@@ -501,7 +505,9 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
     global_step = 0
     best_val_loss = float("inf")
     best_val_wer = float("inf")
+    best_val_cer = float("inf")
     best_train_wer = float("inf")
+    best_train_cer = float("inf")
     best_val_path = None
     training_start_time = time.time()  # Total training time
     log_interval_start = time.time()   # Per-interval timing
@@ -626,11 +632,17 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
 
 
         # Validation at the end of each epoch
-        val_loss, val_acc, val_wer_score, val_word_acc, all_hyp_texts, all_ref_texts = evaluate(cfg, model, val_dataloader, device, enc_dtype, tokenizer=tokenizer)
-        logger.info(f"Epoch {epoch} | Val WER: {val_wer_score:.4f} | Val Word Acc: {val_word_acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
+        val_loss, val_acc, val_wer_score, val_cer_score, val_word_acc, all_hyp_texts, all_ref_texts = evaluate(cfg, model, val_dataloader, device, enc_dtype, tokenizer=tokenizer)
+        
+        # Track best validation metrics
+        if val_cer_score < best_val_cer:
+            best_val_cer = val_cer_score
+        
+        logger.info(f"Epoch {epoch} | Val WER: {val_wer_score:.4f} | Val CER: {val_cer_score:.4f} | Val Word Acc: {val_word_acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
         if run is not None: 
             run.log({
                 "val/wer": val_wer_score,
+                "val/cer": val_cer_score,
                 "val/word_acc": val_word_acc,
                 "val/loss": val_loss,
                 "val/acc": val_acc,
@@ -681,6 +693,7 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
     logger.info("=" * 60)
     logger.info(f"Best Training WER: {best_train_wer:.4f} ({best_train_wer*100:.2f}%)")
     logger.info(f"Best Validation WER: {best_val_wer:.4f} ({best_val_wer*100:.2f}%)")
+    logger.info(f"Best Validation CER: {best_val_cer:.4f} ({best_val_cer*100:.2f}%)")
     logger.info(f"Total Training Time: {total_training_time:.2f} min ({total_training_time/60:.2f} hours)")
     logger.info("=" * 60)
     

@@ -106,10 +106,16 @@ data:
   dataset: speech_dataset
   file: datamodule/dataset.py:get_speech_dataset
   
-  # Common Voice Danish paths
-  train_data_path: data/common_voice_da/train.jsonl
-  val_data_path: data/common_voice_da/validation.jsonl
-  test_data_path: data/common_voice_da/test.jsonl
+  # HuggingFace Dataset path (pre-computed audio arrays)
+  hf_dataset_path: data/cv22_test/da
+  
+  # Split names (maps to HF dataset splits)
+  train_split: train
+  val_split: validation
+  test_split: test
+  
+  # Whether to use raw_transcription (with punctuation/casing) instead of preprocessed
+  use_raw_transcription: false
 
   # Audio settings
   input_type: mel

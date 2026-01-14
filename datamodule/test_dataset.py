@@ -243,7 +243,7 @@ def test_dataset_class(data_dir: Path, config_path: str = None):
     print("="*60)
     
     try:
-        from datamodule.dataset import SpeechDatasetJsonl
+        from datamodule.old_dataset import SpeechDatasetJsonl
         from transformers import AutoTokenizer
         from omegaconf import OmegaConf
     except ImportError as e:

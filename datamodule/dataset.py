@@ -1,49 +1,53 @@
 """
 Speech Dataset for SLAM-ASR training.
 Supports variable-length audio (Common Voice, LibriSpeech, etc.)
-Reads data from JSONL format with fields: source, target, key, duration (optional)
+Reads data from HuggingFace Dataset format with pre-computed audio arrays.
+
+Dataset format:
+- audio_array: List[float32] - Pre-computed audio waveform at 16kHz
+- sampling_rate: int - Audio sample rate (16000)
+- transcription: str - Preprocessed transcription (lowercase, no punctuation)
+- raw_transcription: str - Original transcription
+- duration: float - Audio duration in seconds
+- speaker_id: str - Speaker identifier (optional)
 """
 
-import os.path as osp
-import random 
-import json
 import copy 
+from pathlib import Path
 
 import numpy as np
-import soundfile as sf
-
 import torch
 from torch.utils.data import Dataset
 import whisper
-from utils.compute_utils import calculate_output_length_1d
+from datasets import load_from_disk
 
 
-class SpeechDatasetJsonl(torch.utils.data.Dataset):
+class SpeechDatasetHF(torch.utils.data.Dataset):
     """
-    Dataset for Speech-to-Text with LLM.
+    Dataset for Speech-to-Text with LLM using HuggingFace Dataset format.
     
     Supports:
+    - Pre-computed audio arrays (no file I/O during training)
     - Variable-length audio (no padding to 30s)
     - Multiple input types: raw waveform or mel spectrogram
     - Training and inference modes
     """
     
-    def __init__(self,
-                 dataset_config,
-                 tokenizer=None,
-                 split='train',
-                 ):
+    def __init__(
+        self,
+        dataset_config,
+        tokenizer=None,
+        split='train',
+    ):
         super().__init__()
         self.dataset_config = dataset_config
         self.tokenizer = tokenizer
-        data_parallel_size = 1
         
         self.IGNORE_INDEX = -100  # CrossEntropyLoss ignore index
         self.prompt = None
         self.mel_size = getattr(dataset_config, 'mel_size', 80)  # 80 for whisper base/small/medium
         
         # Simple prompt without chat format - works better for ASR
-        # Avoid USER/ASSISTANT format that can conflict with LLM's chat template
         self.prompt_template = "{}\n"
         self.answer_template = "{}"
         
@@ -59,50 +63,73 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
         self.use_variable_length = getattr(dataset_config, 'use_variable_length', True)
         self.max_audio_length = getattr(dataset_config, 'max_audio_length', 30)  # seconds
         
-        # Max target text length - filter out corrupted samples with TSV data in target
-        # For 20s audio at ~150 words/min = ~50 words = ~300 chars max reasonable
+        # Max target text length - filter out corrupted samples
         self.max_target_chars = getattr(dataset_config, 'max_target_chars', 500)
+        
+        # Whether to use raw_transcription instead of preprocessed transcription
+        self.use_raw_transcription = getattr(dataset_config, 'use_raw_transcription', False)
         
         assert self.input_type in ["raw", "mel"], "input_type must be one of [raw, mel]" 
 
-        # Load data from JSONL
-        self.data_list = []
-        skipped = 0
-        if split == "train":
-            data_path = dataset_config.train_data_path
-        elif split == "test":
-            data_path = dataset_config.test_data_path
-        else:  # validation
-            data_path = dataset_config.val_data_path
-            
-        print(f"[Dataset] Loading {split} data from: {data_path}")
-        with open(data_path, encoding='utf-8') as fin:
-            for line in fin:
-                data_dict = json.loads(line.strip())
-                # Filter out corrupted samples (TSV data in target field)
-                target_len = len(data_dict.get('target', ''))
-                if target_len > self.max_target_chars:
-                    skipped += 1
-                    continue
-                self.data_list.append(data_dict)
+        # Load data from HuggingFace Dataset
+        data_path = getattr(dataset_config, 'hf_dataset_path', None)
+        if data_path is None:
+            raise ValueError("dataset_config must have 'hf_dataset_path' pointing to HuggingFace dataset directory")
         
+        data_path = Path(data_path)
+        if not data_path.exists():
+            raise FileNotFoundError(f"HuggingFace dataset not found at: {data_path}")
+        
+        print(f"[Dataset] Loading {split} data from HuggingFace dataset: {data_path}")
+        
+        # Load the dataset
+        full_dataset = load_from_disk(str(data_path))
+        
+        # Get the correct split - normalize split names
+        if split in ("val", "dev"):
+            split = "validation"  # HF uses 'validation' not 'val' or 'dev'
+        
+        if split not in full_dataset:
+            available_splits = list(full_dataset.keys())
+            raise ValueError(f"Split '{split}' not found. Available: {available_splits}")
+        
+        self.hf_dataset = full_dataset[split]
+        
+        # Filter samples by text length - use column access (fast, no audio loading)
+        transcription_key = "raw_transcription" if self.use_raw_transcription else "transcription"
+        
+        # Get all transcriptions at once (Arrow is columnar, this is O(1) per column)
+        all_transcriptions = self.hf_dataset[transcription_key]
+        
+        # Build valid indices without loading audio
+        self.valid_indices = [
+            idx for idx, text in enumerate(all_transcriptions)
+            if text and 0 < len(text) <= self.max_target_chars
+        ]
+        
+        skipped = len(self.hf_dataset) - len(self.valid_indices)
         if skipped > 0:
-            print(f"[Dataset] WARNING: Skipped {skipped} samples with target > {self.max_target_chars} chars (corrupted data)")
-        print(f"[Dataset] Loaded {len(self.data_list)} samples for {split}")
+            print(f"[Dataset] WARNING: Skipped {skipped} samples with invalid text length")
+        print(f"[Dataset] Loaded {len(self.valid_indices)} valid samples for {split}")
 
-    def get_source_len(self, data_dict):
-        return data_dict.get("source_len", 0)
-
-    def get_target_len(self, data_dict):
-        return data_dict.get("target_len", 0)
-    
     def __len__(self):
-        return len(self.data_list)
+        return len(self.valid_indices)
     
-    def _load_audio(self, audio_path):
-        """Load audio file and return numpy array at 16kHz."""
-        audio_raw = whisper.load_audio(audio_path)  # Always returns 16kHz
-        return audio_raw
+    def _get_audio_array(self, sample):
+        """Get audio array from sample, converting from list to numpy if needed."""
+        audio_array = sample.get("audio_array")
+        if audio_array is None:
+            raise ValueError("Sample missing 'audio_array' field")
+        
+        # HuggingFace Arrow format stores arrays as lists
+        if isinstance(audio_array, list):
+            audio_array = np.array(audio_array, dtype=np.float32)
+        elif isinstance(audio_array, np.ndarray):
+            audio_array = audio_array.astype(np.float32)
+        else:
+            raise TypeError(f"Unexpected audio_array type: {type(audio_array)}")
+        
+        return audio_array
     
     def _compute_mel_spectrogram(self, audio_raw):
         """Compute mel spectrogram, handling variable-length audio."""
@@ -123,14 +150,19 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
         return audio_mel, audio_raw
     
     def __getitem__(self, index):
-        data_dict = self.data_list[index]
-        audio_path = data_dict.get("source")
-        target = data_dict.get("target", None)
-        task = data_dict.get("prompt", "ASR")
-        key = data_dict.get("key", None)
-
-        # Load audio
-        audio_raw = self._load_audio(audio_path)
+        # Map to valid index
+        real_idx = self.valid_indices[index]
+        sample = self.hf_dataset[real_idx]
+        
+        # Get transcription
+        transcription_key = "raw_transcription" if self.use_raw_transcription else "transcription"
+        target = sample.get(transcription_key, "")
+        
+        # Get audio array (pre-computed, no file loading needed!)
+        audio_raw = self._get_audio_array(sample)
+        
+        # Use speaker_id as key for identification
+        key = sample.get("speaker_id", f"sample_{real_idx}")
         
         if self.input_type == "raw":
             audio_raw = torch.from_numpy(audio_raw)
@@ -258,7 +290,7 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
         """Collate samples into a batch."""
         assert samples is not None 
         
-        # Maximum sequence length to prevent OOM (vocab=152k needs ~0.3GB per 1000 tokens per batch)
+        # Maximum sequence length to prevent OOM
         MAX_SEQ_LENGTH = 512  # Safety limit
         
         input_prompt_lengths = [s["audio_length"] + s['prompt_length'] for s in samples]
@@ -267,20 +299,9 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
         input_prompt_max_length = max(input_prompt_lengths)
         input_answer_max_length = max(input_answer_lengths)
         
-        # DEBUG: Check for unexpectedly large sequences
-        total_max_len = input_prompt_max_length + input_answer_max_length
-        if total_max_len > 500:
-            print(f"\n[DEBUG COLLATOR] WARNING: Large sequence detected!")
-            print(f"[DEBUG COLLATOR] input_prompt_max_length: {input_prompt_max_length}")
-            print(f"[DEBUG COLLATOR] input_answer_max_length: {input_answer_max_length}")
-            print(f"[DEBUG COLLATOR] audio_lengths: {[s['audio_length'] for s in samples]}")
-            print(f"[DEBUG COLLATOR] prompt_lengths: {[s['prompt_length'] for s in samples]}")
-            print(f"[DEBUG COLLATOR] input_ids_lengths: {[len(s['input_ids']) for s in samples]}")
-        
         # Truncate to prevent OOM
+        total_max_len = input_prompt_max_length + input_answer_max_length
         if total_max_len > MAX_SEQ_LENGTH:
-            print(f"[DEBUG COLLATOR] Truncating from {total_max_len} to {MAX_SEQ_LENGTH}")
-            # Proportionally reduce both parts
             scale = MAX_SEQ_LENGTH / total_max_len
             input_prompt_max_length = int(input_prompt_max_length * scale)
             input_answer_max_length = MAX_SEQ_LENGTH - input_prompt_max_length
@@ -310,13 +331,6 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
             audio_mel_post_mask = None
         elif self.input_type == "mel":
             audio_mel_max_length = max([s['audio_mel'].shape[0] for s in samples])
-            
-            # DEBUG: Check audio_mel sizes
-            if audio_mel_max_length > 2000:
-                print(f"\n[DEBUG COLLATOR] WARNING: Large audio_mel detected!")
-                print(f"[DEBUG COLLATOR] audio_mel_max_length: {audio_mel_max_length}")
-                print(f"[DEBUG COLLATOR] audio_mel shapes: {[s['audio_mel'].shape for s in samples]}")
-            
             audio_mel = torch.stack([self.pad(s['audio_mel'], audio_mel_max_length, 0)
                                   for s in samples])
             audio_mel_post_mask = torch.zeros(len(samples), (audio_mel_max_length + 1) // 2)
@@ -366,6 +380,6 @@ class SpeechDatasetJsonl(torch.utils.data.Dataset):
 
 
 def get_speech_dataset(dataset_config, tokenizer, split):
-    """Factory function to create speech dataset."""
-    dataset = SpeechDatasetJsonl(dataset_config, tokenizer, split)
+    """Factory function to create speech dataset from HuggingFace format."""
+    dataset = SpeechDatasetHF(dataset_config, tokenizer, split)
     return dataset
