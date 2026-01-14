@@ -1,6 +1,6 @@
 # SLAM-ASR Danish: Setup and Training Guide
 
-This guide covers setting up the environment, downloading the Common Voice Danish dataset, and training the SLAM-ASR model for the SPEAKABLE 2026 paper.
+This guide covers setting up the environment, downloading the Common Voice Danish dataset, and training the SLAM-ASR model.
 
 ## Table of Contents
 1. [Prerequisites](#prerequisites)
@@ -16,7 +16,7 @@ This guide covers setting up the environment, downloading the Common Voice Danis
 - Python 3.10+
 - CUDA 11.8+ (for GPU training)
 - ~20GB disk space for dataset
-- ~16GB GPU VRAM for Qwen2.5-3B (or use 0.5B variant for 6GB)
+- ~16GB GPU VRAM for Qwen2.5-3B
 
 ---
 
@@ -40,276 +40,210 @@ source .venv/bin/activate
 ```
 
 ### 3. Install dependencies
+
+**Option A: Using uv (recommended, faster)**
 ```bash
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip install transformers accelerate omegaconf wandb jiwer
-pip install openai-whisper
-pip install datasets  # For downloading Common Voice
+pip install uv
+uv sync
+```
+
+**Option B: Using pip**
+```bash
+pip install -e .
 ```
 
 ---
 
 ## Dataset Download
 
-### Setup Mozilla Data Collective API
-
-1. Create account at https://datacollective.mozillafoundation.org
-2. Go to the Danish dataset page and **accept the terms**
-3. Get API key from https://datacollective.mozillafoundation.org/profile/credentials
-4. Set environment variable:
-   ```bash
-   # Linux/Mac
-   export MDC_API_KEY=your_api_key
-   
-   # Windows PowerShell
-   $env:MDC_API_KEY = "your_api_key"
-   ```
-
-### Download Dataset
+### 1. Login to HuggingFace
 
 ```bash
-python datamodule/get_dataset.py --language da
+huggingface-cli login
+# Enter your token from: https://huggingface.co/settings/tokens
 ```
 
-Options:
-- `--max_hours 10` - Limit total hours (useful for testing)
-- `--archive path/to/file.tar.gz` - Use pre-downloaded archive
-- `--root data` - Output directory (default: data)
+### 2. Download Dataset
 
-### Verify Dataset
-
-After download, verify the structure:
 ```bash
-python -c "
-import json
-from pathlib import Path
+python scripts/download_dataset.py --language da
+```
 
-data_dir = Path('data/common_voice_da')
-for split in ['train', 'validation', 'test']:
-    jsonl = data_dir / f'{split}.jsonl'
-    if jsonl.exists():
-        with open(jsonl) as f:
-            count = sum(1 for _ in f)
-        print(f'{split}: {count} samples')
-    else:
-        print(f'{split}: NOT FOUND')
-"
+This will:
+- Download Common Voice 22.0 Danish from HuggingFace
+- Preprocess transcriptions (lowercase, remove punctuation)
+- Filter by duration (0.5s - 30s)
+- Save as HuggingFace Dataset format
+
+**Options:**
+```bash
+# Custom output directory
+python scripts/download_dataset.py --language da --output-dir data/my_dataset
+
+# Custom duration filters
+python scripts/download_dataset.py --language da --min-duration 1.0 --max-duration 20.0
+
+# Download specific splits only
+python scripts/download_dataset.py --language da --splits train dev
+```
+
+### 3. Verify Dataset
+
+```bash
+python -c "from datasets import load_from_disk; ds = load_from_disk('data/cv22_hf/da'); print(ds)"
 ```
 
 Expected output:
 ```
-train: ~3500 samples
-validation: ~2500 samples  
-test: ~2600 samples
+DatasetDict({
+    train: Dataset({features: [...], num_rows: ~3600})
+    validation: Dataset({features: [...], num_rows: ~2500})
+    test: Dataset({features: [...], num_rows: ~2700})
+})
 ```
 
 ---
 
 ## Training
 
-### 1. Configure Weights & Biases (Optional but Recommended)
+### 1. Setup Weights & Biases (Optional but Recommended)
 
 ```bash
 wandb login
-# Enter your API key from https://wandb.ai/settings
+# Enter your API key from: https://wandb.ai/settings
 ```
 
-### 2. Verify Configuration
-
-Check `configs/train_config.yaml`:
-
-```yaml
-model:
-  encoder_num_layers: null  # null = all 6 layers, or set 1-6
-
-data:
-  train_data_path: data/common_voice_da/train.jsonl
-  val_data_path: data/common_voice_da/validation.jsonl
-  test_data_path: data/common_voice_da/test.jsonl
-
-log:
-  use_wandb: true
-  wandb_project_name: SLAM_ASR_Danish
-  wandb_exp_name: whisper_base_qwen_danish
+Or set in `.env` file:
+```
+WANDB_API_KEY=your_key_here
 ```
 
-### 3. Start Training
+### 2. Start Training
 
+**Baseline (12 layers):**
 ```bash
-# Baseline training (all 6 encoder layers)
-python train.py --config configs/train_config.yaml
+python train.py --config configs/danish/train/baseline.yaml
 ```
 
-Training will:
-- Load Whisper-base encoder (frozen)
-- Load Qwen2.5-3B LLM (frozen)
-- Train only the linear projector
-- Log to W&B with efficiency metrics
-- Save best checkpoint based on validation WER
+**LR Scheduler Experiments:**
+```bash
+# With LR scheduler (cosine warmup)
+python train.py --config configs/danish/train/baseline_with_scheduler.yaml
 
-### 4. Monitor Training
+# Fixed LR (constant)
+python train.py --config configs/danish/train/baseline_fixed_lr.yaml
+```
 
-- **Console:** Watch for efficiency metrics at startup
-- **W&B Dashboard:** View loss curves, WER, and efficiency table
-- **Checkpoints:** Saved to `outputs/slam_asr_danish/`
+### 3. Monitor Training
+
+- **Console:** Watch for WER/CER metrics
+- **W&B Dashboard:** View loss curves at https://wandb.ai
+- **Checkpoints:** Saved to `outputs/` directory
 
 ---
 
 ## Layer Ablation Experiments
 
-For the SPEAKABLE 2026 paper, run experiments with different encoder layer counts:
+For testing encoder efficiency with different layer counts:
 
-### Quick Reference
+### Available Configs
 
-| Layers | Params Used | % of Total | Config Setting |
-|--------|-------------|------------|----------------|
-| 6 | 20.59M | 100% | `encoder_num_layers: null` |
-| 5 | 17.44M | 84.7% | `encoder_num_layers: 5` |
-| 4 | 14.29M | 69.4% | `encoder_num_layers: 4` |
-| 3 | 11.13M | 54.1% | `encoder_num_layers: 3` |
-| 2 | 7.98M | 38.8% | `encoder_num_layers: 2` |
-| 1 | 4.83M | 23.5% | `encoder_num_layers: 1` |
+| Experiment | Layers | Config |
+|------------|--------|--------|
+| Baseline | 12 | `configs/danish/train/baseline.yaml` |
+| Ablation 11L | 11 | `configs/danish/train/ablation_11L.yaml` |
+| Ablation 10L | 10 | `configs/danish/train/ablation_10L.yaml` |
+| Ablation 9L | 9 | `configs/danish/train/ablation_9L.yaml` |
+| Ablation 8L | 8 | `configs/danish/train/ablation_8L.yaml` |
 
-### Run Ablation Experiments
+### Run All Ablations
 
-**Option 1: Modify config directly**
-```bash
-# Edit configs/train_config.yaml
-# Change: encoder_num_layers: 4
-
-python train.py --config configs/train_config.yaml
-```
-
-**Option 2: Use a script to run all experiments**
-
-Create `scripts/run_ablation.py`:
-
-```python
-"""Run layer ablation experiments for SPEAKABLE 2026 paper."""
-import os
-import subprocess
-from omegaconf import OmegaConf
-
-BASE_CONFIG = "configs/train_config.yaml"
-LAYER_CONFIGS = [6, 5, 4, 3, 2, 1]  # null=6 means all layers
-
-def run_experiment(num_layers):
-    # Load config
-    cfg = OmegaConf.load(BASE_CONFIG)
-    
-    # Modify for this experiment
-    cfg.model.encoder_num_layers = num_layers if num_layers < 6 else None
-    cfg.log.wandb_exp_name = f"whisper_base_{num_layers}L_danish"
-    cfg.train.output_dir = f"outputs/ablation_{num_layers}L/"
-    
-    # Save temporary config
-    temp_config = f"configs/temp_ablation_{num_layers}L.yaml"
-    OmegaConf.save(cfg, temp_config)
-    
-    print(f"\n{'='*60}")
-    print(f"Running experiment: {num_layers} encoder layers")
-    print(f"{'='*60}\n")
-    
-    # Run training
-    subprocess.run(["python", "train.py", "--config", temp_config])
-    
-    # Cleanup
-    os.remove(temp_config)
-
-if __name__ == "__main__":
-    for layers in LAYER_CONFIGS:
-        run_experiment(layers)
-```
-
-Run all experiments:
 ```bash
 python scripts/run_ablation.py
 ```
 
-### Expected Results Format (for Paper)
-
-After training, collect results from W&B or logs:
-
-| Layers | Params (M) | WER (%) | CER (%) | RTF |
-|--------|------------|---------|---------|-----|
-| 6 | 20.59 | X.XX | X.XX | X.XX |
-| 4 | 14.29 | X.XX | X.XX | X.XX |
-| 2 | 7.98 | X.XX | X.XX | X.XX |
+Or run individually:
+```bash
+python train.py --config configs/danish/train/ablation_11L.yaml
+python train.py --config configs/danish/train/ablation_10L.yaml
+# etc.
+```
 
 ---
 
 ## Troubleshooting
 
 ### CUDA Out of Memory
-- Reduce `batch_size` in config (try 4 or 2)
-- Use `test_config.yaml` with Qwen2.5-0.5B for debugging
+- Reduce `batch_size` in config (try 4 → 2)
+- Enable `mixed_precision: true`
 
 ### Dataset Download Issues
-- Ensure you have accepted HuggingFace terms for Common Voice
-- Login with `huggingface-cli login`
+- Ensure HuggingFace login: `huggingface-cli login`
+- Check internet connection
 
 ### W&B Issues
 - Disable with `use_wandb: false` in config
 - Or run `wandb offline` for offline logging
 
 ### Audio Loading Errors
-- Ensure `ffmpeg` is installed: `apt install ffmpeg` (Linux) or `choco install ffmpeg` (Windows)
-- Verify audio paths in JSONL are absolute paths
-
----
-
-## File Structure After Setup
-
-```
-Efficient_ASR_LLM/
-├── configs/
-│   ├── train_config.yaml    # Main training config
-│   ├── eval_config.yaml     # Evaluation config
-│   └── test_config.yaml     # Debug config (6GB VRAM)
-├── data/
-│   └── common_voice_da/
-│       ├── audio/
-│       │   ├── train/       # Training audio files
-│       │   ├── validation/  # Validation audio files
-│       │   └── test/        # Test audio files
-│       ├── train.jsonl
-│       ├── validation.jsonl
-│       ├── test.jsonl
-│       └── dataset_info.json
-├── models/
-│   ├── encoder.py           # Whisper encoder with layer pruning
-│   ├── model.py             # SLAM-ASR model
-│   └── projector.py         # Linear/MLP projector
-├── utils/
-│   └── metrics.py           # WER, CER, efficiency metrics
-├── outputs/
-│   └── slam_asr_danish/     # Training outputs & checkpoints
-├── train.py
-├── eval.py
-└── scripts/
-    ├── download_common_voice.py
-    └── run_ablation.py
-```
+- Ensure `ffmpeg` is installed: `apt install ffmpeg` (Linux)
 
 ---
 
 ## Quick Start Summary
 
 ```bash
-# 1. Setup environment
+# 1. Setup
+git clone https://github.com/KarthikKolluriKB/Efficient_ASR_LLM.git
+cd Efficient_ASR_LLM
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 
-# 2. Set API key and download dataset
-export MDC_API_KEY=your_api_key
-python datamodule/get_dataset.py --language da
+# 2. Download dataset
+huggingface-cli login
+python scripts/download_dataset.py --language da
 
-# 3. Login to W&B (optional)
+# 3. Verify
+python -c "from datasets import load_from_disk; print(load_from_disk('data/cv22_hf/da'))"
+
+# 4. Train
 wandb login
+python train.py --config configs/danish/train/baseline.yaml
+```
 
-# 4. Train baseline
-python train.py --config configs/train_config.yaml
+---
 
-# 5. Run ablation experiments
-python scripts/run_ablation.py
+## File Structure
+
+```
+Efficient_ASR_LLM/
+├── configs/
+│   └── danish/
+│       ├── train/
+│       │   ├── baseline.yaml
+│       │   ├── baseline_with_scheduler.yaml
+│       │   ├── baseline_fixed_lr.yaml
+│       │   └── ablation_*.yaml
+│       └── eval/
+├── data/
+│   └── cv22_hf/
+│       └── da/                  # HuggingFace Dataset
+│           ├── train/
+│           ├── validation/
+│           ├── test/
+│           └── dataset_dict.json
+├── datamodule/
+│   ├── dataset.py              # Dataset class
+│   ├── download_data.py        # Download utilities
+│   ├── preprocess_data.py      # Preprocessing utilities
+│   └── hf_data.py              # Main data preparation
+├── models/
+│   ├── encoder.py              # Whisper encoder
+│   ├── model.py                # SLAM-ASR model
+│   └── projector.py            # Projector layers
+├── scripts/
+│   ├── download_dataset.py     # Dataset download script
+│   └── run_ablation.py         # Run all ablations
+├── train.py                    # Training script
+└── eval.py                     # Evaluation script
 ```
