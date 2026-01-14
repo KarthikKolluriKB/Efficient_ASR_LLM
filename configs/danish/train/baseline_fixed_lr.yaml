@@ -70,7 +70,7 @@ train:
 early_stopping: 
   monitor: val/wer
   mode: min 
-  patience: 3
+  patience: 1
   min_delta: 0.001
 
 data:
