@@ -221,13 +221,19 @@ class ASRLLM(nn.Module):
         # This is the correct mixed precision pattern.
 
         # 2. Projector (Project to LLM embedding space)
-        if self.model_config.projector == "q-former":
+        projector_type = self.model_config.projector.lower() if self.model_config.projector else ""
+        
+        if projector_type in ["q-former", "qformer"]:
             # Q-former
             encoder_outputs = self.projector(encoder_outputs, audio_mel_post_mask) # [B, T_enc_proj, D_llm]
 
-        elif self.model_config.projector in ["linear", "cov1d-linear"]:
+        elif projector_type in ["linear", "concatlinear", "cov1d-linear", "conv1d-linear", "cov1d", "conv1d"]:
             # linear or conv1d + linear
             encoder_outputs = self.projector(encoder_outputs)  # [B, T_enc_proj, D_llm]
+        else:
+            # Fallback - just run projector if it exists
+            if self.projector is not None:
+                encoder_outputs = self.projector(encoder_outputs)
         
         # DEBUG: Print projected shape
         debug_key2 = f"_debug_proj_{labels is not None}"
