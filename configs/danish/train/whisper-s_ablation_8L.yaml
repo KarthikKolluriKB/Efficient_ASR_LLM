@@ -1,5 +1,5 @@
 # =============================================================================
-# Ablation: Whisper-small 10 Layers - TRAIN
+# Ablation: Whisper-small 8 Layers - TRAIN
 # =============================================================================
 
 model:
@@ -17,7 +17,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: 10
+  encoder_num_layers: 8
   
   projector: concatLinear
   projector_ds_rate: 5
@@ -37,12 +37,12 @@ train:
   max_eval_batches: 100
   max_new_tokens: 128
   repetition_penalty: 1.5
-  num_epochs: 5
-  total_steps: 4500
-  warmup_steps: 200
-  validation_interval: 225
+  num_epochs: 8
+  total_steps: 7200
+  warmup_steps: 350
+  validation_interval: 450
   lr: 1.0e-4
-  weight_decay: 0.0
+  weight_decay: 0.01
   grad_clip: 1.0
   gamma: 0.85
   use_fp16: false
@@ -52,7 +52,7 @@ train:
   freeze_encoder: true
   freeze_layers: false
   num_freeze_layers: 0
-  output_dir: outputs/danish/ablation_10L/
+  output_dir: outputs/danish/ablation_8L/
   save_model: true
   seed: 42
   one_gpu: true
@@ -63,13 +63,14 @@ train:
 
 scheduler: 
   name: cosine_with_warmup
-  total_training_steps: 4500
-  warmup_steps: 200
+  total_training_steps: 7200
+  warmup_steps: 350
+  min_lr_ratio: 0.1
 
 early_stopping: 
   monitor: val/wer
   mode: min 
-  patience: 1
+  patience: 3
   min_delta: 0.001
 
 data:
@@ -85,7 +86,7 @@ data:
   normalize: false
   projector_ds_rate: 5
   use_variable_length: true
-  max_audio_length: 20
+  max_audio_length: 30
   fix_length_audio: -1
   max_target_chars: 500
   inference_mode: false
@@ -95,7 +96,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_Danish_ABLATIONS
-  wandb_exp_name: ablation_10L
+  wandb_exp_name: ablation_8L
   log_dir: ./logs
-  log_filename: ablation_10L.log
+  log_filename: ablation_8L.log
   log_interval: 50
