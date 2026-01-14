@@ -55,7 +55,7 @@ train:
   freeze_encoder: true
   freeze_layers: false
   num_freeze_layers: 0
-  output_dir: outputs/danish/baseline/
+  output_dir: outputs/danish/whisper-s_baseline/
   save_model: true
   seed: 42
   one_gpu: true
@@ -99,7 +99,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_Danish_ABLATIONS
-  wandb_exp_name: baseline
+  wandb_exp_name: whisper-s_baseline
   log_dir: ./logs
-  log_filename: baseline.log
+  log_filename: whisper-s_baseline.log
   log_interval: 50
