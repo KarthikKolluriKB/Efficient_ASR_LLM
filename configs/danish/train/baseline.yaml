@@ -40,12 +40,12 @@ train:
   max_eval_batches: 100
   max_new_tokens: 128
   repetition_penalty: 1.5
-  num_epochs: 5
-  total_steps: 4500
-  warmup_steps: 200
-  validation_interval: 225
+  num_epochs: 8                   # CHANGED: 5 -> 8 (small dataset needs more epochs)
+  total_steps: 7200               # CHANGED: 4500 -> 7200 (adjusted for 8 epochs)
+  warmup_steps: 350               # CHANGED: 200 -> 350 (~5% of total steps)
+  validation_interval: 450        # CHANGED: 225 -> 450 (adjusted for more steps)
   lr: 1.0e-4
-  weight_decay: 0.0
+  weight_decay: 0.01              # CHANGED: 0.0 -> 0.01 (regularization for small dataset)
   grad_clip: 1.0
   gamma: 0.85
   use_fp16: false
@@ -66,13 +66,14 @@ train:
 
 scheduler: 
   name: cosine_with_warmup
-  total_training_steps: 4500
-  warmup_steps: 200
+  total_training_steps: 7200      # CHANGED: 4500 -> 7200 (must match train.total_steps)
+  warmup_steps: 350               # CHANGED: 200 -> 350 (must match train.warmup_steps)
+  min_lr_ratio: 0.1               # ADDED: prevents LR from decaying to 0
 
 early_stopping: 
   monitor: val/wer
   mode: min 
-  patience: 1
+  patience: 3                     # CHANGED: 1 -> 3 (your experiments showed patience=1 stops too early)
   min_delta: 0.001
 
 data:
@@ -88,7 +89,7 @@ data:
   normalize: false
   projector_ds_rate: 5
   use_variable_length: true
-  max_audio_length: 20
+  max_audio_length: 30            # CHANGED: 20 -> 30 (Whisper supports 30s, avoid truncation)
   fix_length_audio: -1
   max_target_chars: 500
   inference_mode: false
