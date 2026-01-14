@@ -189,8 +189,17 @@ def process_split(
         "empty": 0,
     }
     
+    # Debug: Check what files exist in audio_dir
+    audio_dir = Path(audio_dir)
+    existing_files = list(audio_dir.glob("*.mp3"))
+    print(f"[Debug] Audio dir: {audio_dir}")
+    print(f"[Debug] Found {len(existing_files)} .mp3 files in audio_dir")
+    if existing_files:
+        print(f"[Debug] First 3 files: {[f.name for f in existing_files[:3]]}")
+    
     iterator = tqdm(transcript, desc="Processing") if show_progress else transcript
     
+    first_missing_logged = False
     for sample in iterator:
         stats["total"] += 1
         
@@ -202,6 +211,9 @@ def process_split(
         
         audio_path = audio_dir / audio_filename
         if not audio_path.exists():
+            if not first_missing_logged:
+                print(f"[Debug] First missing file: {audio_path}")
+                first_missing_logged = True
             stats["missing"] += 1
             continue
         

@@ -78,12 +78,29 @@ def download_and_extract_audio(
     audio_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"[Download] Extracting to: {audio_dir}")
+    extracted_count = 0
     with tarfile.open(tar_path, "r") as tar:
-        for member in tqdm(tar.getmembers(), desc=f"Extracting {split}"):
-            if member.isfile():
+        members = tar.getmembers()
+        for member in tqdm(members, desc=f"Extracting {split}"):
+            if member.isfile() and member.name.endswith('.mp3'):
                 # Extract just the filename, not full path
-                member.name = os.path.basename(member.name)
-                tar.extract(member, path=audio_dir)
+                basename = os.path.basename(member.name)
+                # Extract file content and write to destination
+                dest_path = audio_dir / basename
+                try:
+                    with tar.extractfile(member) as src:
+                        if src is not None:
+                            with open(dest_path, 'wb') as dst:
+                                dst.write(src.read())
+                            extracted_count += 1
+                except Exception as e:
+                    print(f"[Warning] Failed to extract {member.name}: {e}")
+    
+    print(f"[Download] Extracted {extracted_count} audio files to {audio_dir}")
+    
+    # Verify extraction
+    mp3_files = list(audio_dir.glob("*.mp3"))
+    print(f"[Download] Verified {len(mp3_files)} .mp3 files in {audio_dir}")
     
     return audio_dir
 
