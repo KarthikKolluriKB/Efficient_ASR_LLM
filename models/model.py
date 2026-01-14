@@ -114,17 +114,20 @@ def setup_llm(train_config, model_config, **kwargs):
 
 
 def setup_projector(train_config, model_config, **kwargs):
-    if model_config.projector == "linear":
+    projector_type = model_config.projector.lower() if model_config.projector else ""
+    
+    if projector_type in ["linear", "concatlinear"]:
         from models.projector import EncoderProjectorConcat
         projector = EncoderProjectorConcat(model_config)
-    elif model_config.projector == "cov1d-linear":
+    elif projector_type in ["cov1d-linear", "conv1d-linear", "cov1d", "conv1d"]:
         from models.projector import EncoderProjectorCov1d
         projector = EncoderProjectorCov1d(model_config)
-    elif model_config.projector == "q-former":
+    elif projector_type in ["q-former", "qformer"]:
         from models.projector import EncoderProjectorQFormer
         projector = EncoderProjectorQFormer(model_config)
     else:
-        return None
+        raise ValueError(f"Unknown projector type: '{model_config.projector}'. "
+                        f"Supported: linear, concatLinear, cov1d-linear, q-former")
     print_module_size(projector, model_config.projector)
     return projector
 
