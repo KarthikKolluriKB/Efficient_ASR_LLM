@@ -8,6 +8,10 @@ Usage:
     python scripts/run_sequential_training.py config1.yaml config2.yaml config3.yaml
     python scripts/run_sequential_training.py configs/danish/train/*.yaml --gap 10
     python scripts/run_sequential_training.py -c configs/danish/train/whisper-s_baseline.yaml configs/danish/train/whisper-s_ablation_6L.yaml
+    
+    # Run on specific GPU
+    python scripts/run_sequential_training.py --gpu 0 config1.yaml config2.yaml
+    python scripts/run_sequential_training.py --gpu 1 config3.yaml config4.yaml
 """
 import os
 import sys
@@ -21,6 +25,9 @@ from typing import List
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Fix CUDA memory fragmentation (prevents OOM on long training runs)
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 def clear_gpu_memory():
@@ -64,30 +71,46 @@ def countdown_timer(seconds: int, message: str = "Waiting"):
     print(f"\r{message}: Done!                    ")
 
 
-def run_training(config_path: str, run_number: int, total_runs: int) -> tuple:
+def run_training(config_path: str, run_number: int, total_runs: int, gpu_id: int = None) -> tuple:
     """
     Run training with the specified config file.
+    
+    Args:
+        config_path: Path to the config file
+        run_number: Current experiment number
+        total_runs: Total number of experiments
+        gpu_id: GPU device ID to use (None for default)
     
     Returns:
         tuple: (success: bool, duration_seconds: float)
     """
     config_name = Path(config_path).stem
     
+    gpu_info = f" [GPU {gpu_id}]" if gpu_id is not None else ""
     print(f"\n{'='*70}")
-    print(f"  EXPERIMENT [{run_number}/{total_runs}]: {config_name}")
+    print(f"  EXPERIMENT [{run_number}/{total_runs}]{gpu_info}: {config_name}")
     print(f"{'='*70}")
     print(f"  Config: {config_path}")
+    if gpu_id is not None:
+        print(f"  GPU: CUDA:{gpu_id}")
     print(f"  Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'─'*70}\n")
     
     start_time = time.time()
+    
+    # Set up environment with GPU and CUDA settings
+    env = os.environ.copy()
+    env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    if gpu_id is not None:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     
     try:
         # Run training
         result = subprocess.run(
             [sys.executable, "train.py", "--config", config_path],
             check=True,
-            cwd=Path(__file__).parent.parent  # Run from project root
+            cwd=Path(__file__).parent.parent,  # Run from project root
+            env=env
         )
         success = result.returncode == 0
     except subprocess.CalledProcessError as e:
@@ -171,6 +194,12 @@ Examples:
         help="Gap between experiments in minutes (default: 1)"
     )
     parser.add_argument(
+        "--gpu",
+        type=int,
+        default=None,
+        help="GPU device ID to use (e.g., 0 or 1). Sets CUDA_VISIBLE_DEVICES."
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print what would be run without executing"
@@ -213,6 +242,8 @@ Examples:
     print(f"{'='*70}")
     print(f"  Total experiments: {total_runs}")
     print(f"  Gap between runs:  {args.gap} minutes")
+    if args.gpu is not None:
+        print(f"  GPU Device:        CUDA:{args.gpu}")
     print(f"  Continue on error: {'Yes' if args.continue_on_error else 'No'}")
     print(f"\n  Experiments in order:")
     for i, config in enumerate(valid_configs, 1):
@@ -220,9 +251,10 @@ Examples:
     print(f"{'='*70}")
     
     if args.dry_run:
-        print("\n🔍 DRY RUN - Commands that would be executed:\n")
+        gpu_prefix = f"CUDA_VISIBLE_DEVICES={args.gpu} " if args.gpu is not None else ""
+        print(f"\n🔍 DRY RUN - Commands that would be executed:\n")
         for i, config in enumerate(valid_configs, 1):
-            print(f"  [{i}/{total_runs}] python train.py --config {config}")
+            print(f"  [{i}/{total_runs}] {gpu_prefix}python train.py --config {config}")
             if i < total_runs:
                 print(f"          └─ Wait {args.gap} minutes for GPU cooldown")
         print("\n  No actual training was performed.")
@@ -238,7 +270,7 @@ Examples:
     
     for i, config in enumerate(valid_configs, 1):
         try:
-            success, duration = run_training(config, i, total_runs)
+            success, duration = run_training(config, i, total_runs, gpu_id=args.gpu)
             results.append({
                 "config": Path(config).stem,
                 "success": success,
