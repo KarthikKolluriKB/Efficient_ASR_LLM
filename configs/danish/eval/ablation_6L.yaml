@@ -1,5 +1,5 @@
 # =============================================================================
-# Evaluation Config - Whisper-small Baseline (8 Layers)
+# Evaluation Config - Whisper-small Baseline (6 Layers)
 # =============================================================================
 # Usage:
 #   python eval.py --config configs/eval_baseline.yaml
@@ -27,7 +27,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: 8       
+  encoder_num_layers: 6       
   
   # Projector settings
   projector: concatLinear
@@ -43,7 +43,7 @@ model:
 # -----------------------------------------------------------------------------
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
-  projector_path: outputs/danish/whisper-s_ablation_8L/projector_best_wer.pt
+  projector_path: outputs/danish/whisper-s_ablation_6L/projector_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
   batch_size: 4
@@ -58,7 +58,7 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/danish/whisper-s_ablation_8L/eval/
+  output_dir: outputs/danish/whisper-s_ablation_6L/eval/
   save_predictions: true
 
 # -----------------------------------------------------------------------------
@@ -69,7 +69,7 @@ train:
   batch_size: 4
   val_batch_size: 4
   num_workers: 4
-  output_dir: outputs/danish/whisper-s_ablation_8L/
+  output_dir: outputs/danish/whisper-s_ablation_6L/
   freeze_llm: true
   freeze_encoder: true
   mixed_precision: true
@@ -106,6 +106,6 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_Danish_ABLATIONS
-  wandb_exp_name: eval_whisper-s_ablation_8L
+  wandb_exp_name: eval_whisper-s_ablation_6L
   log_dir: ./logs
-  log_filename: eval_ablation_8L.log
+  log_filename: eval_ablation_6L.log

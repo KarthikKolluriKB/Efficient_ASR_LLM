@@ -51,7 +51,7 @@ eval:
   
   # Generation settings
   max_new_tokens: 128            # Max tokens to generate
-  num_beams: 4                   # Beam search size (1=greedy, 4=beam search)
+  num_beams: 2                   # Beam search size (1=greedy, 4=beam search)
   repetition_penalty: 1.0        # Penalty for repeated tokens (1.0=no penalty)
   length_penalty: 1.0            # Length penalty (1.0=neutral, >1=longer, <1=shorter)
   temperature: 1.0               # Sampling temperature (only used if do_sample=True)
