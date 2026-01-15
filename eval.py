@@ -3,7 +3,9 @@ Evaluation script for SLAM-ASR model.
 Tests trained model on test set using actual generation (not teacher forcing).
 
 Usage:
-    python eval.py --cfg_path configs/eval_config.yaml --ckpt_path outputs/slam_asr_eng_test/projector_best_wer.pt
+    python eval.py --config configs/eval_baseline.yaml
+    python eval.py --config configs/eval_baseline.yaml --num_beams 4
+    python eval.py --config configs/eval_baseline.yaml --ckpt_path outputs/model/projector_best_wer.pt
 
 Output:
     - WER, Word Accuracy metrics
@@ -31,49 +33,6 @@ from utils.log_config import get_logger
 from utils.utils import ensure_dir
 
 logger = get_logger(log_dir="logs", filename="eval.log")
-
-
-def truncate_for_generation(input_ids, attention_mask, labels, modality_mask, device):
-    """
-    Truncate inputs to only include audio + prompt (remove answer).
-    This is required for proper generation - we don't want the answer in the input.
-    
-    Returns:
-        Truncated tensors ready for generation
-    """
-    gen_input_ids_list = []
-    gen_attention_mask_list = []
-    gen_modality_mask_list = []
-    
-    for i in range(labels.shape[0]):
-        # Find where the answer starts (first non-ignored label)
-        label_row = labels[i]
-        answer_start_positions = (label_row != -100).nonzero(as_tuple=True)[0]
-        
-        if len(answer_start_positions) > 0:
-            answer_start = answer_start_positions[0].item()
-        else:
-            answer_start = label_row.shape[0]
-        
-        # Truncate to only audio + prompt (exclude answer)
-        gen_input_ids_list.append(input_ids[i, :answer_start])
-        gen_attention_mask_list.append(attention_mask[i, :answer_start])
-        gen_modality_mask_list.append(modality_mask[i, :answer_start])
-    
-    # Pad truncated sequences to same length (left-pad)
-    max_gen_len = max(len(seq) for seq in gen_input_ids_list)
-    gen_input_ids = torch.zeros(len(gen_input_ids_list), max_gen_len, dtype=input_ids.dtype, device=device)
-    gen_attention_mask = torch.zeros(len(gen_attention_mask_list), max_gen_len, dtype=attention_mask.dtype, device=device)
-    gen_modality_mask = torch.zeros(len(gen_modality_mask_list), max_gen_len, dtype=modality_mask.dtype, device=device)
-    
-    for i, (ids, mask, mod_mask) in enumerate(zip(gen_input_ids_list, gen_attention_mask_list, gen_modality_mask_list)):
-        seq_len = len(ids)
-        # Left-pad
-        gen_input_ids[i, max_gen_len - seq_len:] = ids
-        gen_attention_mask[i, max_gen_len - seq_len:] = mask
-        gen_modality_mask[i, max_gen_len - seq_len:] = mod_mask
-    
-    return gen_input_ids, gen_attention_mask, gen_modality_mask
 
 
 def save_examples_jsonl(hyp_texts, ref_texts, output_path, filename="test_examples.jsonl"):
@@ -108,6 +67,7 @@ def log_examples_to_wandb(hyp_texts, ref_texts, run, num_examples=50):
     run.log({"test/examples": table})
     logger.info(f"Logged {min(num_examples, len(hyp_texts))} examples to wandb")
 
+
 @torch.no_grad()
 def run_eval(args):
     """
@@ -131,9 +91,28 @@ def run_eval(args):
         wandb_cfg = cfg.log if hasattr(cfg, 'log') else None
         eval_cfg = cfg.eval if hasattr(cfg, 'eval') else None
         
-        # Get generation settings
-        max_new_tokens = args.max_new_tokens or (eval_cfg.max_new_tokens if eval_cfg else 128)
-        repetition_penalty = args.repetition_penalty or 1.3
+        # ============== GENERATION SETTINGS ==============
+        # Priority: CLI args > eval config > defaults
+        max_new_tokens = args.max_new_tokens or (
+            eval_cfg.max_new_tokens if eval_cfg and hasattr(eval_cfg, 'max_new_tokens') else 128
+        )
+        repetition_penalty = args.repetition_penalty or (
+            eval_cfg.repetition_penalty if eval_cfg and hasattr(eval_cfg, 'repetition_penalty') else 1.0
+        )
+        num_beams = args.num_beams or (
+            eval_cfg.num_beams if eval_cfg and hasattr(eval_cfg, 'num_beams') else 1
+        )
+        length_penalty = eval_cfg.length_penalty if eval_cfg and hasattr(eval_cfg, 'length_penalty') else 1.0
+        do_sample = eval_cfg.do_sample if eval_cfg and hasattr(eval_cfg, 'do_sample') else False
+        temperature = eval_cfg.temperature if eval_cfg and hasattr(eval_cfg, 'temperature') else 1.0
+        batch_size = args.batch_size or (
+            eval_cfg.batch_size if eval_cfg and hasattr(eval_cfg, 'batch_size') else 8
+        )
+        
+        logger.info(f"Generation settings: num_beams={num_beams}, max_new_tokens={max_new_tokens}, "
+                   f"repetition_penalty={repetition_penalty}, length_penalty={length_penalty}, "
+                   f"batch_size={batch_size}")
+        # ==================================================
         
         # 2. Initialize wandb if enabled
         if wandb_cfg and wandb_cfg.use_wandb:
@@ -193,7 +172,7 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
         
         test_dataloader = DataLoader(
             test_dataset,
-            batch_size=args.batch_size,
+            batch_size=batch_size,
             shuffle=False,
             collate_fn=test_dataset.collator,
             num_workers=4,
@@ -210,7 +189,7 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
         all_ref_texts = []
         all_wer_scores = []
         
-        logger.info("Starting evaluation with generation...")
+        logger.info(f"Starting evaluation with generation (num_beams={num_beams})...")
         
         for batch_idx, batch in enumerate(tqdm(test_dataloader, desc="Evaluating")):
             # Move batch to device
@@ -235,38 +214,36 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
                         ref_text = tokenizer.decode(valid_tokens, skip_special_tokens=True).strip()
                         ref_texts.append(ref_text)
             else:
-                logger.error("Batch has neither 'target' nor 'labels' - cannot get reference texts")
+                logger.error("Batch has neither 'targets' nor 'labels' - cannot get reference texts")
                 continue
-            
-            # For generation, we need to know where to truncate
-            # In inference mode, the input already excludes the answer
-            gen_input_ids = input_ids
-            gen_attention_mask = attention_mask
-            gen_modality_mask = modality_mask
             
             # Generate transcriptions
             if use_autocast:
                 with torch.autocast(device_type='cuda', dtype=amp_dtype):
                     generated_ids = model.generate(
-                        input_ids=gen_input_ids,
-                        attention_mask=gen_attention_mask,
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
                         audio_mel=audio_mel,
-                        modality_mask=gen_modality_mask,
+                        modality_mask=modality_mask,
                         max_new_tokens=max_new_tokens,
-                        num_beams=1,
-                        do_sample=False,
+                        num_beams=num_beams,
+                        do_sample=do_sample,
                         repetition_penalty=repetition_penalty,
+                        length_penalty=length_penalty,
+                        temperature=temperature,
                     )
             else:
                 generated_ids = model.generate(
-                    input_ids=gen_input_ids,
-                    attention_mask=gen_attention_mask,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
                     audio_mel=audio_mel,
-                    modality_mask=gen_modality_mask,
+                    modality_mask=modality_mask,
                     max_new_tokens=max_new_tokens,
-                    num_beams=1,
-                    do_sample=False,
+                    num_beams=num_beams,
+                    do_sample=do_sample,
                     repetition_penalty=repetition_penalty,
+                    length_penalty=length_penalty,
+                    temperature=temperature,
                 )
             
             # Decode generated texts
@@ -310,6 +287,7 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
             logger.info("FINAL EVALUATION RESULTS:")
             logger.info("="*60)
             logger.info(f"Total samples: {len(all_hyp_texts)}")
+            logger.info(f"Beam size: {num_beams}")
             logger.info(f"Average WER: {avg_wer:.4f}")
             logger.info(f"Word Accuracy: {word_acc:.4f}")
             logger.info("="*60)
@@ -320,15 +298,18 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
                     "test/wer": avg_wer,
                     "test/word_accuracy": word_acc,
                     "test/num_samples": len(all_hyp_texts),
+                    "test/num_beams": num_beams,
                 })
                 run.summary["test/final_wer"] = avg_wer
                 run.summary["test/final_word_accuracy"] = word_acc
+                run.summary["test/num_beams"] = num_beams
                 
                 # Log examples table
                 log_examples_to_wandb(all_hyp_texts, all_ref_texts, run, num_examples=50)
             
             # Save predictions to JSONL
             output_dir = args.output_dir or (eval_cfg.output_dir if eval_cfg else "eval_results")
+            ensure_dir(output_dir)
             save_examples_jsonl(all_hyp_texts, all_ref_texts, output_dir)
             
             # Also save a summary file
@@ -338,6 +319,9 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
                 "config": args.cfg_path,
                 "split": args.split,
                 "num_samples": len(all_hyp_texts),
+                "num_beams": num_beams,
+                "max_new_tokens": max_new_tokens,
+                "repetition_penalty": repetition_penalty,
                 "wer": avg_wer,
                 "word_accuracy": word_acc,
             }
@@ -354,7 +338,7 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
         
     except torch.cuda.OutOfMemoryError as e:
         logger.error(f"CUDA out of memory: {e}")
-        logger.error("Try reducing batch size")
+        logger.error("Try reducing batch size or num_beams")
         if device and device.type == 'cuda':
             torch.cuda.empty_cache()
         raise
@@ -399,8 +383,8 @@ def parse_args():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=8,
-        help="Batch size for evaluation (smaller for generation).",
+        default=None,
+        help="Batch size for evaluation. Overrides config.",
     )
     parser.add_argument(
         "--split",
@@ -417,8 +401,8 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="eval_results",
-        help="Directory to save evaluation results.",
+        default=None,
+        help="Directory to save evaluation results. Overrides config.",
     )
     parser.add_argument(
         "--wandb_exp_name",
@@ -429,14 +413,20 @@ def parse_args():
     parser.add_argument(
         "--max_new_tokens",
         type=int,
-        default=128,
-        help="Maximum number of new tokens to generate.",
+        default=None,
+        help="Maximum number of new tokens to generate. Overrides config.",
     )
     parser.add_argument(
         "--repetition_penalty",
         type=float,
-        default=1.3,
-        help="Repetition penalty for generation.",
+        default=None,
+        help="Repetition penalty for generation. Overrides config.",
+    )
+    parser.add_argument(
+        "--num_beams",
+        type=int,
+        default=None,
+        help="Number of beams for beam search. Overrides config.",
     )
     args = parser.parse_args()
     
@@ -458,31 +448,16 @@ def parse_args():
             parser.error("--ckpt_path is required (or set eval.projector_path in config)")
     
     # Load output_dir from config if not specified
-    if args.output_dir == "eval_results":
+    if args.output_dir is None:
         cfg = OmegaConf.load(args.cfg_path)
         if hasattr(cfg, 'eval') and hasattr(cfg.eval, 'output_dir'):
             args.output_dir = cfg.eval.output_dir
+        else:
+            args.output_dir = "eval_results"
     
     return args
 
 
 if __name__ == "__main__":
-    # For debugging: create temporary args
-    DEBUG = False
-    if DEBUG:
-        args = SimpleNamespace(
-            cfg_path="configs/eval_config.yaml",
-            ckpt_path="outputs/ASRLLM_enc_lin_20h/projector_best_wer.pt",
-            split="test",
-            batch_size=8,
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            output_dir="eval_results",
-            wandb_exp_name="eval_debug",
-            max_new_tokens=128,
-            repetition_penalty=1.3,
-        )
-        logger.info("Using debug arguments")
-    else:
-        args = parse_args()
-    
+    args = parse_args()
     run_eval(args)
