@@ -40,7 +40,7 @@ train:
   max_eval_batches: 100
   max_new_tokens: 128
   repetition_penalty: 1.5
-  num_epochs: 5
+  num_epochs: 8
   total_steps: 4500
   warmup_steps: 200
   validation_interval: 225
@@ -55,7 +55,7 @@ train:
   freeze_encoder: true
   freeze_layers: false
   num_freeze_layers: 0
-  output_dir: outputs/danish/whisper-s_baseline_lora/
+  output_dir: outputs/danish/whisper-s_baseline_lora_low/
   save_model: true
   seed: 42
   deterministic: false
@@ -85,7 +85,7 @@ scheduler:
 early_stopping: 
   monitor: val/wer
   mode: min 
-  patience: 2                    # Slightly more patience with LoRA
+  patience: 3                    # Slightly more patience with LoRA
   min_delta: 0.001
 
 data:
@@ -111,7 +111,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_Danish_ABLATIONS_LoRA
-  wandb_exp_name: whisper-s_baseline_lora
+  wandb_exp_name: whisper-s_baseline_lora_low
   log_dir: ./logs
-  log_filename: whisper-s_baseline_lora.log
+  log_filename: whisper-s_baseline_lora_low.log
   log_interval: 50
