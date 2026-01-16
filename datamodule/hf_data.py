@@ -13,10 +13,11 @@ Usage:
     python -m datamodule.hf_data --language nl --output-dir data/cv22_hf
 """
 
+import gc
 from pathlib import Path
 from typing import Optional
 
-from datasets import Dataset, DatasetDict, Features, Value, Sequence
+from datasets import Dataset, DatasetDict, Features, Value, Sequence, concatenate_datasets
 
 from datamodule.download_data import download_transcript, download_and_extract_audio
 from datamodule.preprocess_data import load_transcript, process_split
@@ -28,6 +29,83 @@ DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_MIN_DURATION = 0.5   # seconds
 DEFAULT_MAX_DURATION = 30.0  # seconds
 
+# Batch size for dataset creation (to avoid OOM)
+DEFAULT_BATCH_SIZE = 4000
+
+
+def get_dataset_features() -> Features:
+    """
+    Get the HuggingFace Features schema for the dataset.
+    """
+    return Features({
+        "audio_array": Sequence(Value("float32")),
+        "sampling_rate": Value("int32"),
+        "raw_transcription": Value("string"),
+        "transcription": Value("string"),
+        "duration": Value("float32"),
+        "speaker_id": Value("string"),
+    })
+
+
+def create_dataset_in_batches(
+    processed_samples: list,
+    batch_size: int = DEFAULT_BATCH_SIZE
+) -> Dataset:
+    """
+    Create HuggingFace Dataset in batches to avoid OOM errors.
+    
+    For large datasets (e.g., 50+ hours of audio), creating a Dataset
+    from a single list can exceed memory limits. This function processes
+    samples in smaller batches and concatenates them.
+    
+    Args:
+        processed_samples: List of processed sample dictionaries
+        batch_size: Number of samples per batch (default: 4000)
+        
+    Returns:
+        HuggingFace Dataset
+    """
+    features = get_dataset_features()
+    total = len(processed_samples)
+    
+    # For small datasets, process directly
+    if total <= batch_size:
+        print(f"[Dataset] Creating dataset with {total} samples (single batch)")
+        return Dataset.from_list(processed_samples, features=features)
+    
+    # For large datasets, process in batches
+    num_batches = (total + batch_size - 1) // batch_size
+    print(f"[Dataset] Creating dataset in {num_batches} batches (batch_size={batch_size})")
+    
+    datasets = []
+    
+    for i in range(0, total, batch_size):
+        end = min(i + batch_size, total)
+        batch_num = i // batch_size + 1
+        print(f"[Dataset] Processing batch {batch_num}/{num_batches}: samples {i} to {end}")
+        
+        # Extract batch
+        batch = processed_samples[i:end]
+        
+        # Create dataset for this batch
+        ds = Dataset.from_list(batch, features=features)
+        datasets.append(ds)
+        
+        # Clear batch from memory
+        del batch
+        gc.collect()
+    
+    # Concatenate all batches
+    print(f"[Dataset] Concatenating {len(datasets)} batches...")
+    final_dataset = concatenate_datasets(datasets)
+    
+    # Clear intermediate datasets
+    del datasets
+    gc.collect()
+    
+    print(f"[Dataset] Created dataset with {len(final_dataset)} samples")
+    return final_dataset
+
 
 def prepare_dataset(
     language: str,
@@ -37,6 +115,7 @@ def prepare_dataset(
     min_duration: float = DEFAULT_MIN_DURATION,
     max_duration: float = DEFAULT_MAX_DURATION,
     repo_id: str = "fsicoli/common_voice_22_0",
+    batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> DatasetDict:
     """
     Download, preprocess, and create HuggingFace DatasetDict for a language.
@@ -49,6 +128,7 @@ def prepare_dataset(
         min_duration: Minimum audio duration in seconds
         max_duration: Maximum audio duration in seconds
         repo_id: HuggingFace dataset repository ID
+        batch_size: Batch size for dataset creation (to avoid OOM)
         
     Returns:
         HuggingFace DatasetDict with all splits
@@ -101,17 +181,12 @@ def prepare_dataset(
         total_hours = sum(s["duration"] for s in processed_samples) / 3600
         print(f"  Total duration: {total_hours:.2f} hours")
         
-        # Create HuggingFace Dataset
-        features = Features({
-                "audio_array": Sequence(Value("float32")),
-                "sampling_rate": Value("int32"),
-                "raw_transcription": Value("string"),
-                "transcription": Value("string"),
-                "duration": Value("float32"),
-                "speaker_id": Value("string"),
-            })
+        # Create HuggingFace Dataset in batches to avoid OOM
+        dataset = create_dataset_in_batches(processed_samples, batch_size=batch_size)
         
-        dataset = Dataset.from_list(processed_samples, features=features)
+        # Free memory immediately
+        del processed_samples
+        gc.collect()
         
         # Rename 'dev' to 'validation' for consistency
         split_name = "validation" if split == "dev" else split
@@ -161,6 +236,7 @@ def prepare_and_save(
     sample_rate: int = DEFAULT_SAMPLE_RATE,
     min_duration: float = DEFAULT_MIN_DURATION,
     max_duration: float = DEFAULT_MAX_DURATION,
+    batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> Path:
     """
     Convenience function to prepare and save dataset in one call.
@@ -172,6 +248,7 @@ def prepare_and_save(
         sample_rate: Target audio sample rate
         min_duration: Minimum audio duration
         max_duration: Maximum audio duration
+        batch_size: Batch size for dataset creation (to avoid OOM)
         
     Returns:
         Path where dataset was saved
@@ -186,6 +263,7 @@ def prepare_and_save(
         sample_rate=sample_rate,
         min_duration=min_duration,
         max_duration=max_duration,
+        batch_size=batch_size,
     )
     
     # Save dataset
@@ -254,6 +332,12 @@ if __name__ == "__main__":
         default=30.0,
         help="Maximum audio duration in seconds (default: 30.0)"
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=DEFAULT_BATCH_SIZE,
+        help=f"Batch size for dataset creation to avoid OOM (default: {DEFAULT_BATCH_SIZE})"
+    )
     
     args = parser.parse_args()
     
@@ -264,4 +348,5 @@ if __name__ == "__main__":
         sample_rate=args.sample_rate,
         min_duration=args.min_duration,
         max_duration=args.max_duration,
+        batch_size=args.batch_size,
     )

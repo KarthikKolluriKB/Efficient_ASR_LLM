@@ -1,7 +1,7 @@
 # =============================================================================
 # Experiment 1: Baseline - Whisper-small 12 Layers (All)
 # =============================================================================
-# Training config for Danish Common Voice
+# Training config for Dutch Common Voice
 # Whisper-small (all 12 encoder layers) + Qwen2.5-3B + concatLinear projector
 # =============================================================================
 
@@ -55,7 +55,7 @@ train:
   freeze_encoder: true
   freeze_layers: false
   num_freeze_layers: 0
-  output_dir: outputs/danish/whisper-s_baseline/
+  output_dir: outputs/dutch/whisper-s_baseline/
   save_model: true
   seed: 42
   one_gpu: true
@@ -79,7 +79,7 @@ early_stopping:
 data:
   dataset: speech_dataset
   file: datamodule/dataset.py:get_speech_dataset
-  hf_dataset_path: data/cv22_hf/da
+  hf_dataset_path: data/cv22_hf/nl
   train_split: train
   val_split: validation
   test_split: test
@@ -98,8 +98,8 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_Danish_ABLATIONS
-  wandb_exp_name: whisper-s_baseline
+  wandb_project_name: SLAM_ASR_Dutch_ABLATIONS
+  wandb_exp_name: whisper-s_dutch_baseline
   log_dir: ./logs
-  log_filename: whisper-s_baseline.log
+  log_filename: whisper-s_dutch_baseline.log
   log_interval: 50
