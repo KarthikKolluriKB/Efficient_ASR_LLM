@@ -49,11 +49,24 @@ def model_builder(train_config, model_config, **kwargs):
 
     # load ckpt 
     ckpt_path = kwargs.get("ckpt_path", None) 
-    # TODO: check models is loading correctly
     if ckpt_path is not None:
         logger.info(f"Load checkpoint from {ckpt_path}")
         ckpt_dir = torch.load(ckpt_path, map_location="cpu")
-        model.projector.load_state_dict(ckpt_dir['projector'], strict=True)
+        
+        # Load projector weights
+        if 'projector' in ckpt_dir:
+            model.projector.load_state_dict(ckpt_dir['projector'], strict=True)
+            logger.info("Loaded projector weights from checkpoint")
+        
+        # Load LoRA weights if present and LoRA is enabled
+        use_lora = getattr(train_config, 'use_lora', False)
+        if use_lora and 'lora' in ckpt_dir:
+            try:
+                # Load LoRA adapter weights
+                model.llm.load_state_dict(ckpt_dir['lora'], strict=False)
+                logger.info("Loaded LoRA adapter weights from checkpoint")
+            except Exception as e:
+                logger.warning(f"Could not load LoRA weights: {e}")
     
     print_model_size(model, train_config)
 
@@ -102,12 +115,56 @@ def setup_llm(train_config, model_config, **kwargs):
     if train_config.quantization:
         model = prepare_model_for_kbit_training(model)
 
-    if train_config.freeze_llm: 
+    # Apply LoRA if enabled in config
+    use_lora = getattr(train_config, 'use_lora', False)
+    if use_lora:
+        logger.info("=" * 60)
+        logger.info("APPLYING LoRA TO LLM")
+        logger.info("=" * 60)
+        
+        # Get LoRA config from train_config or use defaults
+        lora_config = getattr(train_config, 'lora', None)
+        if lora_config is None:
+            # Default LoRA config
+            lora_r = 16
+            lora_alpha = 32
+            lora_dropout = 0.05
+            lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+        else:
+            lora_r = getattr(lora_config, 'r', 16)
+            lora_alpha = getattr(lora_config, 'alpha', 32)
+            lora_dropout = getattr(lora_config, 'dropout', 0.05)
+            lora_target_modules = list(getattr(lora_config, 'target_modules', 
+                                          ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]))
+        
+        # Create LoRA config
+        peft_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=lora_r,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            target_modules=lora_target_modules,
+            bias="none",
+        )
+        
+        # Apply LoRA
+        model = get_peft_model(model, peft_config)
+        
+        # Log LoRA parameters
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in model.parameters())
+        logger.info(f"LoRA Config: r={lora_r}, alpha={lora_alpha}, dropout={lora_dropout}")
+        logger.info(f"LoRA Target Modules: {lora_target_modules}")
+        logger.info(f"LoRA Trainable Parameters: {trainable_params:,} ({100*trainable_params/total_params:.2f}%)")
+        logger.info("=" * 60)
+        
+        # Print trainable vs frozen
+        model.print_trainable_parameters()
+        
+    elif train_config.freeze_llm: 
         for name, param in model.named_parameters(): 
             param.requires_grad = False
         model.eval()
-
-     # TODO: No PEFT
 
     return model
 

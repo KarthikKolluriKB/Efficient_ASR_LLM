@@ -17,7 +17,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
 from omegaconf import OmegaConf
 
 # internal imports
-from utils.utils import set_seed, get_device, resolve_pad_token, ensure_dir, save_projector
+from utils.utils import set_seed, get_device, resolve_pad_token, ensure_dir, save_projector, save_checkpoint, save_lora_adapter
 from utils.log_config import get_logger
 from utils.wand_config import init_wandb
 from models.model import model_builder
@@ -307,8 +307,9 @@ def main():
     logger.info(f"Loaded configuration file from {args.config}")
 
     # Seed and device
-    set_seed(cfg.train.seed)
-    logger.info(f"Set random seed to {cfg.train.seed}")
+    deterministic = getattr(cfg.train, 'deterministic', False)
+    set_seed(cfg.train.seed, deterministic=deterministic)
+    logger.info(f"Set random seed to {cfg.train.seed} (deterministic={deterministic})")
     device = get_device() 
     logger.info(f"Device: {device}")
 
@@ -332,15 +333,51 @@ def main():
     if cfg.train.freeze_encoder:
         for p in model.encoder.parameters():
             p.requires_grad = False
-    if cfg.train.freeze_llm:
+    
+    # Check if LoRA is enabled
+    use_lora = getattr(cfg.train, 'use_lora', False)
+    
+    # When using LoRA, don't freeze LLM - LoRA adapters are already set as trainable
+    # When not using LoRA and freeze_llm is True, freeze all LLM parameters
+    if not use_lora and cfg.train.freeze_llm:
         for p in model.llm.parameters():
             p.requires_grad = False
 
-    # Optimizer only for projector
+    # Collect trainable parameters
+    # Projector parameters
     projector_params = [p for p in model.projector.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(projector_params, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
+    
+    # LoRA parameters (if enabled)
+    lora_params = []
+    if use_lora:
+        for name, p in model.llm.named_parameters():
+            if p.requires_grad and ("lora_" in name or "modules_to_save" in name):
+                lora_params.append(p)
+        logger.info(f"LoRA trainable parameters: {sum(p.numel() for p in lora_params):,}")
+    
+    # Setup optimizer with parameter groups
+    # Use different learning rates for projector and LoRA if specified
+    lora_lr_multiplier = getattr(cfg.train, 'lora_lr_multiplier', 1.0)
+    
+    if use_lora and lora_params:
+        # Use parameter groups with potentially different learning rates
+        param_groups = [
+            {"params": projector_params, "lr": cfg.train.lr, "name": "projector"},
+            {"params": lora_params, "lr": cfg.train.lr * lora_lr_multiplier, "name": "lora"}
+        ]
+        optimizer = torch.optim.AdamW(param_groups, weight_decay=cfg.train.weight_decay)
+        logger.info(f"Optimizer: AdamW with projector_lr={cfg.train.lr}, lora_lr={cfg.train.lr * lora_lr_multiplier}")
+    else:
+        # Original behavior: only projector parameters
+        optimizer = torch.optim.AdamW(projector_params, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
+
+    # Combine all trainable params for gradient clipping
+    all_trainable_params = projector_params + lora_params
 
     logger.info(f"Model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters")
+    if use_lora:
+        logger.info(f"  - Projector params: {sum(p.numel() for p in projector_params):,}")
+        logger.info(f"  - LoRA params: {sum(p.numel() for p in lora_params):,}")
 
     # Learning rate scheduler (cosine with warmup)
     scheduler = None
@@ -576,13 +613,13 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
                 scaler.scale(loss).backward()
                 if cfg.train.grad_clip is not None: 
                     scaler.unscale_(optimizer)
-                    clip_grad_norm_(projector_params, cfg.train.grad_clip)
+                    clip_grad_norm_(all_trainable_params, cfg.train.grad_clip)
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 loss.backward()
                 if cfg.train.grad_clip is not None: 
-                    clip_grad_norm_(projector_params, cfg.train.grad_clip)
+                    clip_grad_norm_(all_trainable_params, cfg.train.grad_clip)
                 optimizer.step()
 
             # Step the learning rate scheduler
@@ -665,9 +702,16 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
         # Save best model
         if val_wer_score < best_val_wer:
             best_val_wer = val_wer_score
-            best_val_path = os.path.join(cfg.train.output_dir, "projector_best_wer.pt")
-            save_projector(model, best_val_path, global_step)
+            best_val_path = os.path.join(cfg.train.output_dir, "checkpoint_best_wer.pt")
+            save_checkpoint(model, best_val_path, global_step, save_lora=use_lora)
             logger.info(f"New best model saved at step {global_step} to {best_val_path} with val_wer {best_val_wer:.4f}")
+            
+            # Also save LoRA adapter separately if enabled (for easy loading)
+            if use_lora:
+                try:
+                    save_lora_adapter(model, cfg.train.output_dir, adapter_name="lora_adapter_best")
+                except Exception as e:
+                    logger.warning(f"Could not save LoRA adapter separately: {e}")
 
         # Early stopping check
         if early_stop is not None:
@@ -678,9 +722,16 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
                 break
 
     # Final model checkpoint (for reference)
-    final_path = os.path.join(cfg.train.output_dir, "projector_final.pt")
-    save_projector(model, final_path, global_step)
+    final_path = os.path.join(cfg.train.output_dir, "checkpoint_final.pt")
+    save_checkpoint(model, final_path, global_step, save_lora=use_lora)
     logger.info(f"Final model checkpointed at: {final_path}")
+    
+    # Save LoRA adapter separately if enabled
+    if use_lora:
+        try:
+            save_lora_adapter(model, cfg.train.output_dir, adapter_name="lora_adapter_final")
+        except Exception as e:
+            logger.warning(f"Could not save final LoRA adapter separately: {e}")
 
     # End of training     
     logger.info("Training completed.....")
