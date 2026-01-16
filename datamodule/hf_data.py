@@ -16,7 +16,7 @@ Usage:
 from pathlib import Path
 from typing import Optional
 
-from datasets import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict, Features, Value, Sequence
 
 from datamodule.download_data import download_transcript, download_and_extract_audio
 from datamodule.preprocess_data import load_transcript, process_split
@@ -102,7 +102,16 @@ def prepare_dataset(
         print(f"  Total duration: {total_hours:.2f} hours")
         
         # Create HuggingFace Dataset
-        dataset = Dataset.from_list(processed_samples)
+        features = Features({
+                "audio_array": Sequence(Value("float32")),
+                "sampling_rate": Value("int32"),
+                "raw_transcription": Value("string"),
+                "transcription": Value("string"),
+                "duration": Value("float32"),
+                "speaker_id": Value("string"),
+            })
+        
+        dataset = Dataset.from_list(processed_samples, features=features)
         
         # Rename 'dev' to 'validation' for consistency
         split_name = "validation" if split == "dev" else split
