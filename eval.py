@@ -2,13 +2,19 @@
 Evaluation script for SLAM-ASR model.
 Tests trained model on test set using actual generation (not teacher forcing).
 
+Features:
+    - WER and CER calculation
+    - Beam search support (configurable num_beams)
+    - LoRA adapter loading support
+    - Wandb logging
+
 Usage:
     python eval.py --config configs/eval_baseline.yaml
     python eval.py --config configs/eval_baseline.yaml --num_beams 4
     python eval.py --config configs/eval_baseline.yaml --ckpt_path outputs/model/projector_best_wer.pt
 
 Output:
-    - WER, Word Accuracy metrics
+    - WER, CER, Word Accuracy, Char Accuracy metrics
     - Saved examples (JSONL)
     - Wandb logging (if enabled)
 """
@@ -27,12 +33,55 @@ from torch.utils.data import DataLoader
 # Internal imports
 from models.model import model_builder
 from datamodule.dataset import get_speech_dataset
-from utils.metrics import compute_wer, count_encoder_parameters
+from utils.metrics import compute_wer, compute_cer, count_encoder_parameters
 from utils.wand_config import init_wandb
 from utils.log_config import get_logger
 from utils.utils import ensure_dir
 
 logger = get_logger(log_dir="logs", filename="eval.log")
+
+
+def truncate_for_generation(input_ids, attention_mask, labels, modality_mask, device):
+    """
+    Truncate inputs to only include audio + prompt (remove answer).
+    This is required for proper generation - we don't want the answer in the input.
+    
+    Returns:
+        Truncated tensors ready for generation
+    """
+    gen_input_ids_list = []
+    gen_attention_mask_list = []
+    gen_modality_mask_list = []
+    
+    for i in range(labels.shape[0]):
+        # Find where the answer starts (first non-ignored label)
+        label_row = labels[i]
+        answer_start_positions = (label_row != -100).nonzero(as_tuple=True)[0]
+        
+        if len(answer_start_positions) > 0:
+            answer_start = answer_start_positions[0].item()
+        else:
+            answer_start = label_row.shape[0]
+        
+        # Truncate to only audio + prompt (exclude answer)
+        gen_input_ids_list.append(input_ids[i, :answer_start])
+        gen_attention_mask_list.append(attention_mask[i, :answer_start])
+        gen_modality_mask_list.append(modality_mask[i, :answer_start])
+    
+    # Pad truncated sequences to same length (left-pad)
+    max_gen_len = max(len(seq) for seq in gen_input_ids_list)
+    gen_input_ids = torch.zeros(len(gen_input_ids_list), max_gen_len, dtype=input_ids.dtype, device=device)
+    gen_attention_mask = torch.zeros(len(gen_attention_mask_list), max_gen_len, dtype=attention_mask.dtype, device=device)
+    gen_modality_mask = torch.zeros(len(gen_modality_mask_list), max_gen_len, dtype=modality_mask.dtype, device=device)
+    
+    for i, (ids, mask, mod_mask) in enumerate(zip(gen_input_ids_list, gen_attention_mask_list, gen_modality_mask_list)):
+        seq_len = len(ids)
+        # Left-pad
+        gen_input_ids[i, max_gen_len - seq_len:] = ids
+        gen_attention_mask[i, max_gen_len - seq_len:] = mask
+        gen_modality_mask[i, max_gen_len - seq_len:] = mod_mask
+    
+    return gen_input_ids, gen_attention_mask, gen_modality_mask
 
 
 def save_examples_jsonl(hyp_texts, ref_texts, output_path, filename="test_examples.jsonl"):
@@ -129,17 +178,30 @@ def run_eval(args):
         logger.info(f"Loading model with checkpoint: {args.ckpt_path}")
         model, tokenizer = model_builder(train_cfg, model_cfg, data_config=data_cfg)
         
-        # Load projector weights (handle nested checkpoint format)
-        checkpoint = torch.load(args.ckpt_path, map_location='cpu', weights_only=True)
+        # Load checkpoint (handles both projector-only and projector+LoRA formats)
+        checkpoint = torch.load(args.ckpt_path, map_location='cpu', weights_only=False)
+        
+        # Load projector weights
         if 'projector' in checkpoint:
-            # Nested format: {"step": ..., "projector": state_dict}
+            # Nested format: {"step": ..., "projector": state_dict, "lora": ...}
             projector_state = checkpoint['projector']
             logger.info(f"Loaded checkpoint from step {checkpoint.get('step', 'unknown')}")
         else:
-            # Direct state_dict format
+            # Direct state_dict format (legacy)
             projector_state = checkpoint
         model.projector.load_state_dict(projector_state)
         logger.info("Loaded projector weights successfully")
+        
+        # Load LoRA weights if present and LoRA is enabled
+        use_lora = getattr(train_cfg, 'use_lora', False)
+        if use_lora and 'lora' in checkpoint:
+            try:
+                model.llm.load_state_dict(checkpoint['lora'], strict=False)
+                logger.info("Loaded LoRA adapter weights successfully")
+            except Exception as e:
+                logger.warning(f"Could not load LoRA weights from checkpoint: {e}")
+        elif use_lora:
+            logger.warning("LoRA is enabled but no LoRA weights found in checkpoint")
         
         # 4. Move model to device
         device = torch.device(args.device)
@@ -158,6 +220,7 @@ ENCODER EFFICIENCY METRICS
 Model:              Whisper-{model_cfg.encoder_model}
 Layers Used:        {encoder_params['num_layers_used']} / {encoder_params['num_layers_total']}
 Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_params']/1e6:.2f}M)
+LoRA Enabled:       {use_lora}
 {'='*60}
 """
         logger.info(efficiency_summary)
@@ -165,6 +228,7 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
         if run is not None:
             run.summary["efficiency/encoder_layers_used"] = encoder_params['num_layers_used']
             run.summary["efficiency/encoder_params_used_M"] = round(encoder_params['used_params'] / 1e6, 2)
+            run.summary["efficiency/lora_enabled"] = use_lora
         
         # 5. Load Test Dataset
         test_dataset = get_speech_dataset(data_cfg, tokenizer, split=args.split)
@@ -188,6 +252,7 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
         all_hyp_texts = []
         all_ref_texts = []
         all_wer_scores = []
+        all_cer_scores = []  # CER tracking
         
         logger.info(f"Starting evaluation with generation (num_beams={num_beams})...")
         
@@ -252,16 +317,19 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
                 hyp_text = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
                 hyp_texts.append(hyp_text)
             
-            # Compute WER for this batch
+            # Compute WER and CER for this batch
             if hyp_texts and ref_texts:
                 min_len = min(len(hyp_texts), len(ref_texts))
                 batch_hyp = hyp_texts[:min_len]
                 batch_ref = ref_texts[:min_len]
                 
-                batch_wer = compute_wer(batch_hyp, batch_ref)
-                all_wer_scores.append(batch_wer)
-                all_hyp_texts.extend(batch_hyp)
-                all_ref_texts.extend(batch_ref)
+                if batch_hyp and batch_ref:
+                    batch_wer = compute_wer(batch_hyp, batch_ref)
+                    batch_cer = compute_cer(batch_hyp, batch_ref)  # CER calculation
+                    all_wer_scores.append(batch_wer)
+                    all_cer_scores.append(batch_cer)
+                    all_hyp_texts.extend(batch_hyp)
+                    all_ref_texts.extend(batch_ref)
             
             # Print some examples from first batch
             if batch_idx == 0:
@@ -274,34 +342,44 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
                     logger.info(f"  HYP: {hyp_texts[i]}")
             
             # Memory cleanup
+            del input_ids, attention_mask, audio_mel, modality_mask, generated_ids
             if batch_idx % 20 == 0 and device.type == 'cuda':
+                gc.collect()
                 torch.cuda.empty_cache()
         
         # 8. Calculate final metrics
         if all_wer_scores:
             avg_wer = sum(all_wer_scores) / len(all_wer_scores)
+            avg_cer = sum(all_cer_scores) / len(all_cer_scores)
             word_acc = 1.0 - avg_wer if avg_wer <= 1.0 else 0.0
+            char_acc = 1.0 - avg_cer if avg_cer <= 1.0 else 0.0
             
             # Final results
             logger.info("\n" + "="*60)
             logger.info("FINAL EVALUATION RESULTS:")
             logger.info("="*60)
-            logger.info(f"Total samples: {len(all_hyp_texts)}")
-            logger.info(f"Beam size: {num_beams}")
-            logger.info(f"Average WER: {avg_wer:.4f}")
-            logger.info(f"Word Accuracy: {word_acc:.4f}")
+            logger.info(f"Total samples:    {len(all_hyp_texts)}")
+            logger.info(f"Beam size:        {num_beams}")
+            logger.info(f"WER:              {avg_wer:.4f} ({avg_wer*100:.2f}%)")
+            logger.info(f"CER:              {avg_cer:.4f} ({avg_cer*100:.2f}%)")
+            logger.info(f"Word Accuracy:    {word_acc:.4f} ({word_acc*100:.2f}%)")
+            logger.info(f"Char Accuracy:    {char_acc:.4f} ({char_acc*100:.2f}%)")
             logger.info("="*60)
             
             # Log to wandb
             if run is not None:
                 run.log({
                     "test/wer": avg_wer,
+                    "test/cer": avg_cer,
                     "test/word_accuracy": word_acc,
+                    "test/char_accuracy": char_acc,
                     "test/num_samples": len(all_hyp_texts),
                     "test/num_beams": num_beams,
                 })
                 run.summary["test/final_wer"] = avg_wer
+                run.summary["test/final_cer"] = avg_cer
                 run.summary["test/final_word_accuracy"] = word_acc
+                run.summary["test/final_char_accuracy"] = char_acc
                 run.summary["test/num_beams"] = num_beams
                 
                 # Log examples table
@@ -322,8 +400,11 @@ Used Params:        {encoder_params['used_params']:,} ({encoder_params['used_par
                 "num_beams": num_beams,
                 "max_new_tokens": max_new_tokens,
                 "repetition_penalty": repetition_penalty,
+                "use_lora": use_lora,
                 "wer": avg_wer,
+                "cer": avg_cer,
                 "word_accuracy": word_acc,
+                "char_accuracy": char_acc,
             }
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=2)
