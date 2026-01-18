@@ -26,6 +26,10 @@ from datamodule.download_data import download_transcript, download_and_extract_a
 from datamodule.preprocess_data import load_transcript, process_split
 
 
+# Buffer multiplier: download more audio than needed to account for filtering
+DOWNLOAD_BUFFER_MULTIPLIER = 1.2  # Download 20% extra to ensure enough valid samples
+
+
 # Default configuration
 DEFAULT_SPLITS = ["train", "dev", "test"]
 DEFAULT_SAMPLE_RATE = 16000
@@ -218,7 +222,16 @@ def prepare_dataset(
         print(f"[Transcript] Loaded {len(transcript)} entries")
         
         # Download and extract audio
-        audio_dir = download_and_extract_audio(language, split, temp_dir, repo_id)
+        # For training split with hour limit, download with buffer to ensure enough valid samples
+        download_target_hours = None
+        if split == "train" and max_train_hours is not None:
+            download_target_hours = max_train_hours * DOWNLOAD_BUFFER_MULTIPLIER
+            print(f"[Download] Target: {max_train_hours} hours (downloading ~{download_target_hours:.1f} hours with buffer)")
+        
+        audio_dir = download_and_extract_audio(
+            language, split, temp_dir, repo_id,
+            target_hours=download_target_hours
+        )
         
         # Process samples
         print(f"\n[Processing] Processing {len(transcript)} samples...")
