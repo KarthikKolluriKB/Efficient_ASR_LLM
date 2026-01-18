@@ -5,15 +5,18 @@ This script orchestrates:
 1. Downloading transcript and audio files from HuggingFace
 2. Preprocessing audio (loading, resampling) and text (lowercase, no punctuation)
 3. Filtering by duration
-4. Saving as HuggingFace Dataset with pre-computed audio arrays
+4. Optionally limiting training data to a maximum number of hours
+5. Saving as HuggingFace Dataset with pre-computed audio arrays
 
 Usage:
     python -m datamodule.hf_data --language da --output-dir data/cv22_hf
     python -m datamodule.hf_data --language en --output-dir data/cv22_hf
     python -m datamodule.hf_data --language nl --output-dir data/cv22_hf
+    python -m datamodule.hf_data --language en --output-dir data/cv22_hf --max-hours 100
 """
 
 import gc
+import random
 from pathlib import Path
 from typing import Optional
 
@@ -45,6 +48,60 @@ def get_dataset_features() -> Features:
         "duration": Value("float32"),
         "speaker_id": Value("string"),
     })
+
+
+def limit_samples_by_hours(
+    processed_samples: list,
+    max_hours: float,
+    shuffle: bool = True,
+    seed: int = 42,
+) -> list:
+    """
+    Limit processed samples to a maximum number of hours.
+    
+    Samples are shuffled before selection to ensure a representative subset.
+    Selection continues until adding the next sample would exceed max_hours.
+    
+    Args:
+        processed_samples: List of processed sample dictionaries (must have 'duration' key)
+        max_hours: Maximum total duration in hours
+        shuffle: Whether to shuffle samples before selection (default: True)
+        seed: Random seed for reproducibility (default: 42)
+        
+    Returns:
+        List of samples with total duration <= max_hours
+    """
+    if not processed_samples:
+        return []
+    
+    max_seconds = max_hours * 3600
+    
+    # Shuffle samples for representative selection
+    if shuffle:
+        samples = processed_samples.copy()
+        random.seed(seed)
+        random.shuffle(samples)
+    else:
+        samples = processed_samples
+    
+    selected_samples = []
+    total_duration = 0.0
+    
+    for sample in samples:
+        sample_duration = sample["duration"]
+        if total_duration + sample_duration <= max_seconds:
+            selected_samples.append(sample)
+            total_duration += sample_duration
+        
+        # Early exit if we've reached the target
+        if total_duration >= max_seconds:
+            break
+    
+    actual_hours = total_duration / 3600
+    print(f"[Limit] Selected {len(selected_samples)} samples ({actual_hours:.2f} hours) "
+          f"from {len(processed_samples)} samples (target: {max_hours} hours)")
+    
+    return selected_samples
 
 
 def create_dataset_in_batches(
@@ -116,6 +173,8 @@ def prepare_dataset(
     max_duration: float = DEFAULT_MAX_DURATION,
     repo_id: str = "fsicoli/common_voice_22_0",
     batch_size: int = DEFAULT_BATCH_SIZE,
+    max_train_hours: Optional[float] = None,
+    limit_seed: int = 42,
 ) -> DatasetDict:
     """
     Download, preprocess, and create HuggingFace DatasetDict for a language.
@@ -129,6 +188,8 @@ def prepare_dataset(
         max_duration: Maximum audio duration in seconds
         repo_id: HuggingFace dataset repository ID
         batch_size: Batch size for dataset creation (to avoid OOM)
+        max_train_hours: Maximum hours of training data (None = use all data)
+        limit_seed: Random seed for reproducible sample selection when limiting hours
         
     Returns:
         HuggingFace DatasetDict with all splits
@@ -169,8 +230,8 @@ def prepare_dataset(
             max_duration=max_duration,
         )
         
-        # Print stats
-        print(f"\n[Stats] {split}:")
+        # Print stats before limiting
+        print(f"\n[Stats] {split} (before limiting):")
         print(f"  Total: {stats['total']}")
         print(f"  Valid: {stats['valid']}")
         print(f"  Too short (<{min_duration}s): {stats['too_short']}")
@@ -178,8 +239,22 @@ def prepare_dataset(
         print(f"  Missing/Error: {stats['missing']}")
         print(f"  Empty text: {stats['empty']}")
         
+        total_hours_before = sum(s["duration"] for s in processed_samples) / 3600
+        print(f"  Total duration: {total_hours_before:.2f} hours")
+        
+        # Apply hour limit only to training data
+        if split == "train" and max_train_hours is not None:
+            print(f"\n[Limit] Applying {max_train_hours} hour limit to training data...")
+            processed_samples = limit_samples_by_hours(
+                processed_samples,
+                max_hours=max_train_hours,
+                shuffle=True,
+                seed=limit_seed,
+            )
+            stats["valid"] = len(processed_samples)
+        
         total_hours = sum(s["duration"] for s in processed_samples) / 3600
-        print(f"  Total duration: {total_hours:.2f} hours")
+        print(f"  Final duration: {total_hours:.2f} hours ({len(processed_samples)} samples)")
         
         # Create HuggingFace Dataset in batches to avoid OOM
         dataset = create_dataset_in_batches(processed_samples, batch_size=batch_size)
@@ -237,6 +312,8 @@ def prepare_and_save(
     min_duration: float = DEFAULT_MIN_DURATION,
     max_duration: float = DEFAULT_MAX_DURATION,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    max_train_hours: Optional[float] = None,
+    limit_seed: int = 42,
 ) -> Path:
     """
     Convenience function to prepare and save dataset in one call.
@@ -249,6 +326,8 @@ def prepare_and_save(
         min_duration: Minimum audio duration
         max_duration: Maximum audio duration
         batch_size: Batch size for dataset creation (to avoid OOM)
+        max_train_hours: Maximum hours of training data (None = use all data)
+        limit_seed: Random seed for reproducible sample selection when limiting hours
         
     Returns:
         Path where dataset was saved
@@ -264,6 +343,8 @@ def prepare_and_save(
         min_duration=min_duration,
         max_duration=max_duration,
         batch_size=batch_size,
+        max_train_hours=max_train_hours,
+        limit_seed=limit_seed,
     )
     
     # Save dataset
@@ -275,6 +356,8 @@ def prepare_and_save(
     print('='*60)
     print(f"Language: {language}")
     print(f"Output: {save_path.absolute()}")
+    if max_train_hours is not None:
+        print(f"Training data limit: {max_train_hours} hours")
     print(f"\nDataset features:")
     print(f"  - audio_array: Pre-computed audio as float32 array")
     print(f"  - sampling_rate: {sample_rate} Hz")
@@ -338,6 +421,19 @@ if __name__ == "__main__":
         default=DEFAULT_BATCH_SIZE,
         help=f"Batch size for dataset creation to avoid OOM (default: {DEFAULT_BATCH_SIZE})"
     )
+    parser.add_argument(
+        "--max-hours",
+        type=float,
+        default=None,
+        help="Maximum hours of training data (default: None = use all data). "
+             "Only applies to training split; dev and test are kept complete."
+    )
+    parser.add_argument(
+        "--limit-seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducible sample selection when using --max-hours (default: 42)"
+    )
     
     args = parser.parse_args()
     
@@ -349,4 +445,6 @@ if __name__ == "__main__":
         min_duration=args.min_duration,
         max_duration=args.max_duration,
         batch_size=args.batch_size,
+        max_train_hours=args.max_hours,
+        limit_seed=args.limit_seed,
     )
