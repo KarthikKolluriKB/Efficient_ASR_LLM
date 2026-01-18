@@ -43,7 +43,7 @@ model:
 # -----------------------------------------------------------------------------
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
-  projector_path: outputs/dutch/whisper-s_ablation_7L/projector_best_wer.pt
+  projector_path: outputs/dutch/whisper-s_ablation_7L/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
   batch_size: 8
