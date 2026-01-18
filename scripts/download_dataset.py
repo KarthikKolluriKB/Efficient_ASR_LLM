@@ -8,7 +8,7 @@ in HuggingFace Dataset format that's compatible with the training pipeline.
 Usage:
     python scripts/download_dataset.py --language da
     python scripts/download_dataset.py --language da --output-dir data/cv22_hf
-    python scripts/download_dataset.py --language en --max-duration 20
+    python scripts/download_dataset.py --language en --max-hours 100
 
 The dataset will be saved to: {output_dir}/{language}/
     - train/
@@ -43,6 +43,9 @@ Examples:
     
     # Download English dataset with custom output directory
     python scripts/download_dataset.py --language en --output-dir data/cv22_english
+    
+    # Download English with 100 hours of training data
+    python scripts/download_dataset.py --language en --max-hours 100
     
     # Download with custom duration filters
     python scripts/download_dataset.py --language da --min-duration 1.0 --max-duration 15.0
@@ -90,6 +93,25 @@ Examples:
         default=30.0,
         help="Maximum audio duration in seconds (default: 30.0)"
     )
+    parser.add_argument(
+        "--max-hours",
+        type=float,
+        default=None,
+        help="Maximum hours of training data (default: None = use all data). "
+             "Only applies to training split; dev and test are kept complete."
+    )
+    parser.add_argument(
+        "--limit-seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducible sample selection when using --max-hours (default: 42)"
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4000,
+        help="Batch size for dataset creation to avoid OOM (default: 4000)"
+    )
     
     args = parser.parse_args()
     
@@ -101,6 +123,11 @@ Examples:
     print(f"Splits:       {', '.join(args.splits)}")
     print(f"Sample rate:  {args.sample_rate} Hz")
     print(f"Duration:     {args.min_duration}s - {args.max_duration}s")
+    if args.max_hours is not None:
+        print(f"Max hours:    {args.max_hours} hours (training only)")
+        print(f"Limit seed:   {args.limit_seed}")
+    else:
+        print(f"Max hours:    No limit (download all)")
     print("=" * 70)
     
     # Download and prepare dataset
@@ -111,6 +138,9 @@ Examples:
         sample_rate=args.sample_rate,
         min_duration=args.min_duration,
         max_duration=args.max_duration,
+        batch_size=args.batch_size,
+        max_train_hours=args.max_hours,
+        limit_seed=args.limit_seed,
     )
     
     print(f"\n{'=' * 70}")
@@ -120,7 +150,7 @@ Examples:
     print(f"\nTo verify, run:")
     print(f"  python -c \"from datasets import load_from_disk; print(load_from_disk('{save_path}'))\"")
     print(f"\nTo start training:")
-    print(f"  python train.py --config configs/danish/train/baseline.yaml")
+    print(f"  python train.py --config configs/{args.language}/train/baseline.yaml")
 
 
 if __name__ == "__main__":
