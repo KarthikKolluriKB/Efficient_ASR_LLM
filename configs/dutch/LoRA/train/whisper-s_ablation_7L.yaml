@@ -1,17 +1,9 @@
 # =============================================================================
-# Dutch Common Voice Training Configuration (Projector-Only)
+# Dutch Common Voice Training Configuration (Projector-Only) - Ablation: 7 Layers
 # =============================================================================
 # Training config for Dutch Common Voice (~50 hours, ~40,000 samples)
-# Whisper-small (all 12 encoder layers) + Qwen2.5-3B + concatLinear projector
+# Whisper-small (first 7 encoder layers) + Qwen2.5-3B + concatLinear projector
 # Only projector is trained (freeze_llm=true, freeze_encoder=true)
-#
-# Calculation:
-#   - samples: 40,000
-#   - batch_size: 4
-#   - steps_per_epoch: 40,000 / 4 = 10,000
-#   - num_epochs: 3
-#   - total_steps: 10,000 × 3 = 30,000
-#   - warmup_steps: 5% of total = 1,500
 # =============================================================================
 
 model:
@@ -31,7 +23,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: null        # null = all 12 layers
+  encoder_num_layers: 7        # Use only first 7 layers
   
   # Projector Configuration
   projector: concatLinear
@@ -81,7 +73,7 @@ train:
   num_freeze_layers: 0
   
   # Output Configuration
-  output_dir: outputs/dutch/whisper-s_baseline_8b/
+  output_dir: outputs/dutch/whisper-s_ablation_7L/
   save_model: true
   seed: 42
   
@@ -91,19 +83,6 @@ train:
   use_fast_kernels: false
   batching_strategy: packing
   context_length: 384
-
-  # LoRA Configuration
-  use_lora: true
-  lora:
-    r: 16
-    alpha: 32
-    dropout: 0.1
-    target_modules:
-      - q_proj
-      - v_proj
-      - k_proj
-      - o_proj
-
 
 scheduler:
   name: cosine_with_warmup
@@ -140,7 +119,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_Dutch_ABLATIONS
-  wandb_exp_name: whisper-s_dutch_baseline_8b
+  wandb_exp_name: whisper-s_dutch_ablation_7L
   log_dir: ./logs
-  log_filename: whisper-s_dutch_baseline_8b.log
+  log_filename: whisper-s_dutch_ablation_7L.log
   log_interval: 100

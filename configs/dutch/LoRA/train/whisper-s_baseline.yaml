@@ -92,19 +92,6 @@ train:
   batching_strategy: packing
   context_length: 384
 
-  # LoRA Configuration
-  use_lora: true
-  lora:
-    r: 16
-    alpha: 32
-    dropout: 0.1
-    target_modules:
-      - q_proj
-      - v_proj
-      - k_proj
-      - o_proj
-
-
 scheduler:
   name: cosine_with_warmup
   total_training_steps: 15000
