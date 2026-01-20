@@ -1,9 +1,17 @@
 # =============================================================================
-# Dutch Common Voice Training Configuration (Projector-Only) - Ablation: 7 Layers
+# English Common Voice Training Configuration (Projector-Only)
 # =============================================================================
-# Training config for Dutch Common Voice (~50 hours, ~40,000 samples)
-# Whisper-small (first 7 encoder layers) + Qwen2.5-3B + concatLinear projector
+# Training config for English Common Voice (~50 hours, ~40,000 samples)
+# Whisper-small (7 encoder layers) + Qwen2.5-3B + concatLinear projector
 # Only projector is trained (freeze_llm=true, freeze_encoder=true)
+#
+# Calculation:
+#   - samples: 80,000
+#   - batch_size: 8
+#   - steps_per_epoch: 80,000 / 8 = 10,000
+#   - num_epochs: 2 
+#   - total_steps: 10,000 × 2 = 20,000
+#   - warmup_steps: 5% of total = 1,000
 # =============================================================================
 
 model:
@@ -23,7 +31,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: 7        # Use only first 7 layers
+  encoder_num_layers: 7        # null = all 12 layers
   
   # Projector Configuration
   projector: concatLinear
@@ -50,10 +58,10 @@ train:
   repetition_penalty: 1.5
   
   # Training Schedule
-  num_epochs: 3
-  total_steps: 15000
-  warmup_steps: 750
-  validation_interval: 750
+  num_epochs: 2
+  total_steps: 20000
+  warmup_steps: 1000
+  validation_interval: 1000
   
   # Optimizer Configuration
   lr: 1.0e-4
@@ -73,7 +81,7 @@ train:
   num_freeze_layers: 0
   
   # Output Configuration
-  output_dir: outputs/dutch/whisper-s_ablation_7L/
+  output_dir: outputs/english/whisper-s_ablation_7L/
   save_model: true
   seed: 42
   
@@ -84,22 +92,23 @@ train:
   batching_strategy: packing
   context_length: 384
 
+
 scheduler:
   name: cosine_with_warmup
-  total_training_steps: 15000
-  warmup_steps: 750
+  total_training_steps: 20000
+  warmup_steps: 1000    
   min_lr_ratio: 0.1
 
 early_stopping:
   monitor: val/wer
   mode: min
-  patience: 5
+  patience: 3
   min_delta: 0.001
 
 data:
   dataset: speech_dataset
   file: datamodule/dataset.py:get_speech_dataset
-  hf_dataset_path: data/cv22_hf/nl
+  hf_dataset_path: data/cv22_hf/en
   train_split: train
   val_split: validation
   test_split: test
@@ -118,8 +127,8 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_Dutch_ABLATIONS
-  wandb_exp_name: whisper-s_dutch_ablation_7L
+  wandb_project_name: SLAM_ASR_English_ABLATIONS
+  wandb_exp_name: whisper-s_english_ablation_7L
   log_dir: ./logs
-  log_filename: whisper-s_dutch_ablation_7L.log
+  log_filename: whisper-s_english_ablation_7L.log
   log_interval: 100
