@@ -102,13 +102,13 @@ scheduler:
 early_stopping:
   monitor: val/wer
   mode: min
-  patience: 5
+  patience: 3
   min_delta: 0.001
 
 data:
   dataset: speech_dataset
   file: datamodule/dataset.py:get_speech_dataset
-  hf_dataset_path: data/cv22_hf/nl
+  hf_dataset_path: data/cv22_hf/en
   train_split: train
   val_split: validation
   test_split: test
