@@ -1,24 +1,36 @@
-def get_split_info(ds, split_name):
-    num_samples = len(ds)
-    total_hours = sum(ds['duration']) / 3600 if 'duration' in ds.features else 0
-    return num_samples, total_hours
-def print_dataset_report(language_code, language_name):
 import argparse
-from datasets import load_dataset, DatasetDict, load_from_disk
+from datasets import load_dataset, load_from_disk
 
-def get_split_info(ds, split_name):
+def get_split_info(ds):
     num_samples = len(ds)
-    total_hours = sum(ds['duration']) / 3600 if 'duration' in ds.features else 0
+    # Handle missing 'duration' field gracefully
+    if 'duration' in ds.features:
+        total_hours = sum(ds['duration']) / 3600
+    elif 'duration' in ds.column_names:
+        total_hours = sum(ds['duration']) / 3600
+    else:
+        total_hours = 0
     return num_samples, total_hours
 
 def print_dataset_report(language_code, language_name, data_folder=None):
+    # Load dataset from disk or hub
     if data_folder:
         ds = load_from_disk(data_folder)
     else:
         ds = load_dataset("fsicoli/common_voice_22_0", language_code)
-    train_samples, train_hours = get_split_info(ds['train'], 'train')
-    dev_samples, dev_hours = get_split_info(ds['validation'], 'validation')
-    test_samples, test_hours = get_split_info(ds['test'], 'test')
+
+    # Handle missing splits gracefully
+    splits = ['train', 'validation', 'test']
+    split_info = {}
+    for split in splits:
+        if split in ds:
+            split_info[split] = get_split_info(ds[split])
+        else:
+            split_info[split] = (0, 0)
+
+    train_samples, train_hours = split_info['train']
+    dev_samples, dev_hours = split_info['validation']
+    test_samples, test_hours = split_info['test']
     total_samples = train_samples + dev_samples + test_samples
     total_hours = train_hours + dev_hours + test_hours
 
