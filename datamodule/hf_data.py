@@ -27,7 +27,7 @@ from datamodule.preprocess_data import load_transcript, process_split
 
 
 # Buffer multiplier: download more audio than needed to account for filtering
-DOWNLOAD_BUFFER_MULTIPLIER = 1.2  # Download 20% extra to ensure enough valid samples
+DOWNLOAD_BUFFER_MULTIPLIER = 2.0  # Download 100% extra to ensure enough valid samples
 
 
 # Default configuration
@@ -371,6 +371,13 @@ def prepare_and_save(
     print(f"Output: {save_path.absolute()}")
     if max_train_hours is not None:
         print(f"Training data limit: {max_train_hours} hours")
+        # Check actual hours in train split
+        train_ds = dataset_dict.get('train', None)
+        if train_ds is not None:
+            actual_train_hours = sum(train_ds['duration']) / 3600
+            print(f"Actual training hours after filtering/limiting: {actual_train_hours:.2f}")
+            if actual_train_hours < max_train_hours:
+                print(f"[WARNING] Only {actual_train_hours:.2f} hours of training data available after filtering and limiting. Consider increasing DOWNLOAD_BUFFER_MULTIPLIER or checking data quality.")
     print(f"\nDataset features:")
     print(f"  - audio_array: Pre-computed audio as float32 array")
     print(f"  - sampling_rate: {sample_rate} Hz")
@@ -381,7 +388,7 @@ def prepare_and_save(
     print(f"\nTo load:")
     print(f"  from datasets import load_from_disk")
     print(f"  dataset = load_from_disk('{save_path}')")
-    
+
     return save_path
 
 
