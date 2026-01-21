@@ -82,7 +82,7 @@ train:
   num_freeze_layers: 0
   
   # Output Configuration
-  output_dir: outputs/danish/whisper-s_baseline_lora_me/
+  output_dir: outputs/danish/whisper-s_baseline_lora_me_small/
   save_model: true
   seed: 42
   
@@ -96,8 +96,8 @@ train:
   # LoRA Configuration
   use_lora: true
   lora:
-    r: 16
-    alpha: 32
+    r: 4
+    alpha: 8
     dropout: 0.1
     target_modules:
       - q_proj
@@ -116,7 +116,7 @@ early_stopping:
   monitor: val/wer
   mode: min
   patience: 5
-  min_delta: 0.001
+  min_delta: 0.5
 
 data:
   dataset: speech_dataset
@@ -141,7 +141,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_Danish_ABLATIONS_LoRA_ME
-  wandb_exp_name: whisper-s_baseline_lora_me
+  wandb_exp_name: whisper-s_baseline_lora_me_small
   log_dir: ./logs
-  log_filename: whisper-s_baseline_lora_me.log
+  log_filename: whisper-s_baseline_lora_me_small.log
   log_interval: 100
