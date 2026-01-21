@@ -1,5 +1,5 @@
 # =============================================================================
-# Experiment 1: Baseline - Whisper-small 8 Layers + LoRA + More Epochs 
+# Experiment 1: Baseline - Whisper-small 8 Layers (All) + LoRA + More Epochs 
 # =============================================================================
 # Training config for Danish Common Voice with LoRA fine-tuning
 # Whisper-small (all 8 encoder layers) + Qwen2.5-3B (LoRA) + concatLinear projector
@@ -32,7 +32,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: 8       
+  encoder_num_layers: 8        # null = all 12 layers
   
   # Projector Configuration
   projector: concatLinear
@@ -82,7 +82,7 @@ train:
   num_freeze_layers: 0
   
   # Output Configuration
-  output_dir: outputs/danish/whisper-s_ablation_8L_lora_me/
+  output_dir: outputs/danish/whisper-s_ablation_8L_lora_mid/
   save_model: true
   seed: 42
   
@@ -96,8 +96,8 @@ train:
   # LoRA Configuration
   use_lora: true
   lora:
-    r: 16
-    alpha: 32
+    r: 8
+    alpha: 16
     dropout: 0.1
     target_modules:
       - q_proj
@@ -141,7 +141,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_Danish_ABLATIONS_LoRA_ME
-  wandb_exp_name: whisper-s_ablation_8L_lora_me
+  wandb_exp_name: whisper-s_ablation_8L_lora_me_mid
   log_dir: ./logs
-  log_filename: whisper-s_ablation_8L_lora_me.log
+  log_filename: whisper-s_ablation_8L_lora_me_mid.log
   log_interval: 100
