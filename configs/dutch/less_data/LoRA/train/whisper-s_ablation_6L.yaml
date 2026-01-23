@@ -1,19 +1,19 @@
-# =============================================================================
-# Dutch Common Voice Training Configuration (Projector-Only)
-# =============================================================================
-# Training config for Dutch Common Voice (~50 hours, ~40,000 samples)
-# Whisper-small (all 6 encoder layers) + Qwen2.5-3B + concatLinear projector with LoRA
+# =================================================================================
+# Dutch (small dataset) Common Voice Training Configuration (Projector-Only) + LoRA
+# =================================================================================
+# Training config for Dutch Common Voice (~5 hours, ~3656 samples)
+# Whisper-small (all 6 encoder layers) + Qwen2.5-3B + concatLinear projector
 # Only projector is trained (freeze_llm=true, freeze_encoder=true)
 #
 # Calculation:
-#   - samples: 40,000
-#   - batch_size: 8
-#   - steps_per_epoch: 40,000 / 8 = 5,000
-#   - num_epochs: 5
-#   - total_steps: 5,000 × 5 = 25,000
-#   - warmup_steps: 5% of total = 1,250
-#   - validation_interval: 5% of steps_per_epoch = 5% of 25000 = 1250
-# =============================================================================
+#   - samples: 3656
+#   - batch_size: 4
+#   - steps_per_epoch: 3656 / 4 = 914
+#   - num_epochs: 10
+#   - total_steps: 914 × 10 = 9,140
+#   - warmup_steps: 5% of total = 457
+#  - validation_interval: every 457 steps (approx. every 5% of an epoch)
+# =================================================================================
 
 model:
   model_name: ASRLLM
@@ -48,7 +48,7 @@ train:
   run_validation: true
   
   # Batch Configuration
-  batch_size: 8
+  batch_size: 4
   val_batch_size: 8
   gradient_accumulation_steps: 1
   num_workers: 4
@@ -59,10 +59,10 @@ train:
   repetition_penalty: 1.5
   
   # Training Schedule
-  num_epochs: 5
-  total_steps: 25000
-  warmup_steps: 1250
-  validation_interval: 1250
+  num_epochs: 10
+  total_steps: 9140
+  warmup_steps: 457
+  validation_interval: 457
   
   # Optimizer Configuration
   lr: 1.0e-4
@@ -82,7 +82,7 @@ train:
   num_freeze_layers: 0
   
   # Output Configuration
-  output_dir: outputs/dutch/whisper-s_ablation_6L_lora/
+  output_dir: outputs/dutch/5h/whisper-s_dutch_ablation_6L_lora_5h/
   save_model: true
   seed: 42
   
@@ -96,8 +96,8 @@ train:
   # LoRA Configuration
   use_lora: true
   lora:
-    r: 16
-    alpha: 32
+    r: 8
+    alpha: 16
     dropout: 0.1
     target_modules:
       - q_proj
@@ -108,8 +108,8 @@ train:
 
 scheduler:
   name: cosine_with_warmup
-  total_training_steps: 25000
-  warmup_steps: 1250
+  total_training_steps: 9140
+  warmup_steps: 457
   min_lr_ratio: 0.1
 
 early_stopping:
@@ -121,7 +121,7 @@ early_stopping:
 data:
   dataset: speech_dataset
   file: datamodule/dataset.py:get_speech_dataset
-  hf_dataset_path: data/cv22_hf/nl
+  hf_dataset_path: data/nl_5h/nl
   train_split: train
   val_split: validation
   test_split: test
@@ -140,8 +140,8 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_Dutch_ABLATIONS_LoRA
-  wandb_exp_name: whisper-s_dutch_ablation_6L_lora
+  wandb_project_name: SLAM_ASR_Dutch_5h_ABLATIONS_LoRA
+  wandb_exp_name: whisper-s_dutch_ablation_6L_lora_5h
   log_dir: ./logs
-  log_filename: whisper-s_dutch_ablation_6L_lora.log
+  log_filename: whisper-s_dutch_ablation_6L_lora_5h.log
   log_interval: 100
