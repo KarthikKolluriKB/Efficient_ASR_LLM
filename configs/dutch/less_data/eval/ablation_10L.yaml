@@ -1,35 +1,34 @@
 # =============================================================================
-# Evaluation Config - Whisper-small Baseline (10 Layers)
+# Dutch (small dataset) Evaluation Config - Whisper-small Ablation (10 Layers)
 # =============================================================================
 # Usage:
-#   python eval.py --config configs/eval_baseline.yaml
-#   python eval.py --config configs/eval_baseline.yaml --num_beams 2
-#   python eval.py --config configs/eval_baseline.yaml --ckpt_path path/to/checkpoint.pt
+#   python eval.py --config configs/dutch/eval/baseline.yaml
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Model Configuration (must match training config!)
 # -----------------------------------------------------------------------------
+
 model:
   model_name: ASRLLM
   file: models/model.py:ASRLLM
   
-  # LLM settings
+  # LLM Configuration
   llm_model_name: qwen2.5-3B
   llm_model: Qwen/Qwen2.5-3B
   llm_dim: 2048
   llm_model_path: null
   llm_type: decoder_only
   
-  # Encoder settings
+  # Encoder Configuration
   encoder_model_name: whisper-small
   encoder_model: small
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: 10       
+  encoder_num_layers: 10   
   
-  # Projector settings
+  # Projector Configuration
   projector: concatLinear
   projector_ds_rate: 5
   projector_hidden_dim: 2048
@@ -38,12 +37,13 @@ model:
   normalize: false
   encoder_type: finetune
 
+
 # -----------------------------------------------------------------------------
 # Evaluation Configuration
 # -----------------------------------------------------------------------------
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
-  projector_path: outputs/dutch/whisper-s_ablation_10L/checkpoint_best_wer.pt
+  projector_path: outputs/dutch/whisper-s_dutch_ablation_10L_5h/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
   batch_size: 8
@@ -58,7 +58,7 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/dutch/whisper-s_ablation_10L/eval/
+  output_dir: outputs/dutch/whisper-s_dutch_ablation_10L_5h/eval/
   save_predictions: true
 
 # -----------------------------------------------------------------------------
@@ -66,10 +66,10 @@ eval:
 # -----------------------------------------------------------------------------
 train:
   model_name: ASRLLM
-  batch_size: 8
+  batch_size: 4
   val_batch_size: 8
   num_workers: 4
-  output_dir: outputs/dutch/whisper-s_ablation_10L/
+  output_dir: outputs/dutch/whisper-s_dutch_ablation_10L_5h/
   freeze_llm: true
   freeze_encoder: true
   mixed_precision: true
@@ -83,7 +83,7 @@ train:
 data:
   dataset: speech_dataset
   file: datamodule/dataset.py:get_speech_dataset
-  hf_dataset_path: data/cv22_hf/nl
+  hf_dataset_path: data/nl_5h/nl
   train_split: train
   val_split: validation
   test_split: test
@@ -96,7 +96,7 @@ data:
   max_audio_length: 30
   fix_length_audio: -1
   max_target_chars: 500
-  inference_mode: true           # IMPORTANT: Must be true for evaluation!
+  inference_mode: false
 
 # -----------------------------------------------------------------------------
 # Logging Configuration
@@ -105,7 +105,8 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_Dutch_ABLATIONS
-  wandb_exp_name: eval_whisper-s_ablation_10L
+  wandb_project_name: SLAM_ASR_Dutch_ABLATIONS_5h
+  wandb_exp_name: eval_whisper-s_dutch_ablation_10L_5h
   log_dir: ./logs
-  log_filename: eval_ablation_10L_nl.log
+  log_filename: eval_whisper-s_dutch_ablation_10L_5h.log
+  log_interval: 100
