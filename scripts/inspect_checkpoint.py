@@ -17,6 +17,39 @@ import torch
 from collections import defaultdict
 
 
+def get_param_info(param):
+    """Safely get parameter shape/info."""
+    if isinstance(param, torch.Tensor):
+        return f"Tensor{tuple(param.shape)}"
+    elif isinstance(param, dict):
+        return f"Dict with {len(param)} keys"
+    else:
+        return f"{type(param).__name__}: {param}"
+
+
+def inspect_state_dict(state_dict, name="state_dict"):
+    """Inspect a state dict and report parameter details."""
+    print(f"\n    [{name}] Contains {len(state_dict)} parameters:")
+    
+    lora_params = []
+    total_params = 0
+    
+    for key, value in state_dict.items():
+        if isinstance(value, torch.Tensor):
+            shape = tuple(value.shape)
+            num_params = value.numel()
+            total_params += num_params
+            print(f"      - {key}: {shape} ({num_params:,} params)")
+            
+            if 'lora' in key.lower():
+                lora_params.append(key)
+        else:
+            print(f"      - {key}: {get_param_info(value)}")
+    
+    print(f"    Total parameters in {name}: {total_params:,}")
+    return lora_params, total_params
+
+
 def inspect_checkpoint(ckpt_path: str, verbose: bool = False):
     """Inspect a checkpoint file and report its contents."""
     
@@ -34,134 +67,124 @@ def inspect_checkpoint(ckpt_path: str, verbose: bool = False):
     # Check checkpoint type
     print(f"[1] Checkpoint Type: {type(checkpoint)}")
     
-    if isinstance(checkpoint, dict):
-        print(f"[2] Top-level keys: {list(checkpoint.keys())}\n")
+    if not isinstance(checkpoint, dict):
+        print(f"    Unexpected checkpoint type!")
+        return
+    
+    print(f"[2] Top-level keys: {list(checkpoint.keys())}")
+    
+    # Print metadata
+    if 'step' in checkpoint:
+        print(f"    → Step: {checkpoint['step']}")
+    if 'epoch' in checkpoint:
+        print(f"    → Epoch: {checkpoint['epoch']}")
+    if 'best_wer' in checkpoint:
+        print(f"    → Best WER: {checkpoint['best_wer']}")
+    if 'best_val_wer' in checkpoint:
+        print(f"    → Best Val WER: {checkpoint['best_val_wer']}")
+    
+    # Check for nested structure (projector, lora as separate dicts)
+    has_nested_structure = 'projector' in checkpoint or 'lora' in checkpoint
+    
+    if has_nested_structure:
+        print(f"\n[3] Nested Checkpoint Structure Detected")
+        print(f"    This checkpoint stores 'projector' and 'lora' separately.\n")
         
-        # Get the state dict (could be nested or direct)
+        all_lora_params = []
+        total_all_params = 0
+        
+        # Inspect projector
+        if 'projector' in checkpoint:
+            print(f"{'='*60}")
+            print(f"PROJECTOR WEIGHTS")
+            print(f"{'='*60}")
+            
+            projector_data = checkpoint['projector']
+            if isinstance(projector_data, dict):
+                lora_p, total_p = inspect_state_dict(projector_data, "projector")
+                all_lora_params.extend(lora_p)
+                total_all_params += total_p
+            else:
+                print(f"    Projector is not a dict: {type(projector_data)}")
+        else:
+            print(f"\n[!] No 'projector' key found in checkpoint")
+        
+        # Inspect LoRA
+        if 'lora' in checkpoint:
+            print(f"\n{'='*60}")
+            print(f"LoRA WEIGHTS")
+            print(f"{'='*60}")
+            
+            lora_data = checkpoint['lora']
+            if lora_data is None:
+                print(f"\n    ✗ 'lora' key exists but is None (no LoRA weights saved)")
+            elif isinstance(lora_data, dict):
+                if len(lora_data) == 0:
+                    print(f"\n    ✗ 'lora' key exists but is empty dict (no LoRA weights)")
+                else:
+                    lora_p, total_p = inspect_state_dict(lora_data, "lora")
+                    all_lora_params.extend(lora_p)
+                    total_all_params += total_p
+            else:
+                print(f"    LoRA is not a dict: {type(lora_data)}")
+        else:
+            print(f"\n[!] No 'lora' key found in checkpoint")
+        
+        # Summary
+        print(f"\n{'='*60}")
+        print("SUMMARY")
+        print(f"{'='*60}")
+        
+        if 'projector' in checkpoint and isinstance(checkpoint['projector'], dict):
+            proj_params = sum(v.numel() for v in checkpoint['projector'].values() if isinstance(v, torch.Tensor))
+            print(f"✓ Projector weights: {len(checkpoint['projector'])} tensors, {proj_params:,} parameters")
+        else:
+            print(f"✗ No projector weights found")
+        
+        if 'lora' in checkpoint:
+            lora_data = checkpoint['lora']
+            if lora_data is None:
+                print(f"✗ LoRA: None (this is a non-LoRA checkpoint)")
+            elif isinstance(lora_data, dict) and len(lora_data) == 0:
+                print(f"✗ LoRA: Empty dict (this is a non-LoRA checkpoint)")
+            elif isinstance(lora_data, dict):
+                lora_params = sum(v.numel() for v in lora_data.values() if isinstance(v, torch.Tensor))
+                print(f"✓ LoRA weights: {len(lora_data)} tensors, {lora_params:,} parameters")
+                
+                # Count LoRA A and B matrices
+                lora_a = [k for k in lora_data.keys() if 'lora_A' in k or 'lora_a' in k]
+                lora_b = [k for k in lora_data.keys() if 'lora_B' in k or 'lora_b' in k]
+                print(f"  → LoRA A matrices: {len(lora_a)}")
+                print(f"  → LoRA B matrices: {len(lora_b)}")
+        else:
+            print(f"✗ No 'lora' key in checkpoint")
+        
+        print(f"{'='*60}\n")
+        
+    else:
+        # Flat state_dict structure
+        print(f"\n[3] Flat State Dict Structure")
+        
+        # Try to find the state dict
         if 'state_dict' in checkpoint:
             state_dict = checkpoint['state_dict']
-            print("    → Using 'state_dict' key")
         elif 'model_state_dict' in checkpoint:
             state_dict = checkpoint['model_state_dict']
-            print("    → Using 'model_state_dict' key")
         else:
-            # Assume the checkpoint itself is the state dict
             state_dict = checkpoint
-            print("    → Checkpoint appears to be a direct state_dict")
         
-        # Print metadata if available
-        if 'epoch' in checkpoint:
-            print(f"    → Epoch: {checkpoint['epoch']}")
-        if 'step' in checkpoint:
-            print(f"    → Step: {checkpoint['step']}")
-        if 'best_wer' in checkpoint:
-            print(f"    → Best WER: {checkpoint['best_wer']}")
-        if 'best_val_wer' in checkpoint:
-            print(f"    → Best Val WER: {checkpoint['best_val_wer']}")
-            
-    else:
-        state_dict = checkpoint
-        print("    → Checkpoint is a direct state_dict (not a dict with metadata)")
-    
-    print(f"\n[3] Total parameters in state_dict: {len(state_dict)}")
-    
-    # Categorize parameters
-    categories = defaultdict(list)
-    lora_params = []
-    projector_params = []
-    encoder_params = []
-    llm_params = []
-    other_params = []
-    
-    for key in state_dict.keys():
-        key_lower = key.lower()
+        lora_params, total_params = inspect_state_dict(state_dict, "model")
         
-        # Check for LoRA parameters
-        if 'lora' in key_lower:
-            lora_params.append(key)
-        elif 'projector' in key_lower:
-            projector_params.append(key)
-        elif 'encoder' in key_lower or 'whisper' in key_lower:
-            encoder_params.append(key)
-        elif 'llm' in key_lower or 'qwen' in key_lower or 'model.model' in key_lower:
-            llm_params.append(key)
+        # Summary
+        print(f"\n{'='*60}")
+        print("SUMMARY")
+        print(f"{'='*60}")
+        print(f"Total parameters: {total_params:,}")
+        if lora_params:
+            print(f"✓ LoRA parameters found: {len(lora_params)}")
         else:
-            other_params.append(key)
-    
-    # Report findings
-    print(f"\n[4] Parameter Categories:")
-    print(f"    → LoRA parameters:      {len(lora_params)}")
-    print(f"    → Projector parameters: {len(projector_params)}")
-    print(f"    → Encoder parameters:   {len(encoder_params)}")
-    print(f"    → LLM parameters:       {len(llm_params)}")
-    print(f"    → Other parameters:     {len(other_params)}")
-    
-    # LoRA specific analysis
-    print(f"\n[5] LoRA Analysis:")
-    if lora_params:
-        print(f"    ✓ LoRA parameters FOUND ({len(lora_params)} total)")
-        
-        # Analyze LoRA structure
-        lora_a_params = [p for p in lora_params if 'lora_a' in p.lower() or 'lora_A' in p]
-        lora_b_params = [p for p in lora_params if 'lora_b' in p.lower() or 'lora_B' in p]
-        
-        print(f"    → LoRA A matrices: {len(lora_a_params)}")
-        print(f"    → LoRA B matrices: {len(lora_b_params)}")
-        
-        if verbose or len(lora_params) <= 20:
-            print(f"\n    LoRA parameter names:")
-            for param in sorted(lora_params)[:20]:
-                shape = tuple(state_dict[param].shape)
-                print(f"      - {param}: {shape}")
-            if len(lora_params) > 20:
-                print(f"      ... and {len(lora_params) - 20} more")
-    else:
-        print(f"    ✗ NO LoRA parameters found")
-        print(f"    → This checkpoint does NOT contain LoRA weights")
-    
-    # Projector analysis
-    print(f"\n[6] Projector Analysis:")
-    if projector_params:
-        print(f"    ✓ Projector parameters FOUND ({len(projector_params)} total)")
-        if verbose or len(projector_params) <= 10:
-            print(f"\n    Projector parameter names:")
-            for param in sorted(projector_params):
-                shape = tuple(state_dict[param].shape)
-                print(f"      - {param}: {shape}")
-    else:
-        print(f"    ✗ NO Projector parameters found")
-    
-    # Show sample of all keys if verbose
-    if verbose:
-        print(f"\n[7] All parameter keys (first 50):")
-        for i, key in enumerate(sorted(state_dict.keys())[:50]):
-            shape = tuple(state_dict[key].shape)
-            print(f"    {i+1}. {key}: {shape}")
-        if len(state_dict) > 50:
-            print(f"    ... and {len(state_dict) - 50} more")
-    
-    # Summary
-    print(f"\n{'='*60}")
-    print("SUMMARY")
-    print(f"{'='*60}")
-    if lora_params:
-        print(f"✓ This is a LoRA checkpoint with {len(lora_params)} LoRA parameters")
-    else:
-        print(f"✗ This is NOT a LoRA checkpoint (no LoRA parameters found)")
-    
-    if projector_params:
-        print(f"✓ Contains projector weights ({len(projector_params)} parameters)")
-    else:
-        print(f"? No projector weights found (might be named differently)")
-    
-    print(f"{'='*60}\n")
-    
-    return {
-        'has_lora': len(lora_params) > 0,
-        'lora_count': len(lora_params),
-        'projector_count': len(projector_params),
-        'total_params': len(state_dict)
-    }
+            print(f"✗ No LoRA parameters found")
+        print(f"{'='*60}\n")
 
 
 def main():
