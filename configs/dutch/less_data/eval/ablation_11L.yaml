@@ -46,7 +46,7 @@ eval:
   projector_path: outputs/dutch/whisper-s_dutch_ablation_11L_5h/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
-  batch_size: 16
+  batch_size: 32
   num_workers: 4
   
   # Generation settings
@@ -96,7 +96,7 @@ data:
   max_audio_length: 30
   fix_length_audio: -1
   max_target_chars: 500
-  inference_mode: false
+  inference_mode: true
 
 # -----------------------------------------------------------------------------
 # Logging Configuration
