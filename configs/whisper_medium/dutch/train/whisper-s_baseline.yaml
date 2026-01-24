@@ -42,29 +42,52 @@ model:
 train:
   model_name: ASRLLM
   run_validation: true
+
+  # Batch Configuration
   batch_size: 8
   val_batch_size: 8
   gradient_accumulation_steps: 1
   num_workers: 4
   max_eval_batches: 100
+
+  # Generation Configuration
   max_new_tokens: 128
   repetition_penalty: 1.5
+
+   # Training Schedule
   num_epochs: 5                  
   total_steps: 25000         
   warmup_steps: 1250               
-  validation_interval: 500        
+  validation_interval: 500     
+
+  # Optimizer Configuration   
   lr: 1.0e-4
   weight_decay: 0.01              
   grad_clip: 1.0
   gamma: 0.85
+
+  # Precision Configuration
+  use_fp16: false
   mixed_precision: true
   quantization: false
+
+  # Freeze Configuration
   freeze_llm: true
   freeze_encoder: true
+  freeze_layers: false
+  num_freeze_layers: 0
+
+  # Output Configuration
   output_dir: outputs/whisper-medium/dutch/baseline/
   save_model: true
   seed: 42
+
+  # Other Configuration
   one_gpu: true
+  use_peft: false
+  use_fast_kernels: false
+  batching_strategy: packing
+  context_length: 384
 
 scheduler: 
   name: cosine_with_warmup
