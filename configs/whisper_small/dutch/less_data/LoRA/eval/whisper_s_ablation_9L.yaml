@@ -2,9 +2,9 @@
 # Evaluation Config - Whisper-small Baseline (9 Layers) + LoRA
 # =============================================================================
 # Usage:
-#   python eval.py --config configs/dutch/LoRA/eval/whisper-s_ablation_9L.yaml
-#   python eval.py --config configs/dutch/LoRA/eval/whisper-s_ablation_9L.yaml --num_beams 2
-#   python eval.py --config configs/dutch/LoRA/eval/whisper-s_ablation_9L.yaml --ckpt_path path/to/checkpoint.pt
+#   python eval.py --config configs/eval_baseline_lora.yaml
+#   python eval.py --config configs/eval_baseline_lora.yaml --num_beams 2
+#   python eval.py --config configs/eval_baseline_lora.yaml --ckpt_path path/to/checkpoint.pt
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -44,10 +44,10 @@ model:
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
   # NOTE: LoRA checkpoints are named checkpoint_best_wer.pt (not projector_best_wer.pt)
-  projector_path: outputs/dutch/whisper-s_ablation_9L_lora/checkpoint_best_wer.pt
+  projector_path: outputs/dutch/5h/whisper-s_dutch_ablation_9L_lora_5h/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
-  batch_size: 8
+  batch_size: 32
   num_workers: 4
   
   # Generation settings
@@ -59,7 +59,7 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/dutch/whisper-s_ablation_9L_lora/eval/
+  output_dir: outputs/dutch/5h/whisper-s_dutch_ablation_9L_lora_5h/eval/
   save_predictions: true
 
 # -----------------------------------------------------------------------------
@@ -70,7 +70,7 @@ train:
   batch_size: 8
   val_batch_size: 8
   num_workers: 4
-  output_dir: outputs/dutch/whisper-s_ablation_9L_lora/
+  output_dir: outputs/dutch/5h/whisper-s_dutch_ablation_9L_lora_5h/
   freeze_llm: false              # Must be false for LoRA
   freeze_encoder: true
   mixed_precision: true
@@ -81,8 +81,8 @@ train:
   # LoRA Configuration (must match training config!)
   use_lora: true
   lora:
-    r: 16
-    alpha: 32
+    r: 8
+    alpha: 16
     dropout: 0.1
     target_modules:
       - q_proj
@@ -96,7 +96,7 @@ train:
 data:
   dataset: speech_dataset
   file: datamodule/dataset.py:get_speech_dataset
-  hf_dataset_path: data/cv22_hf/nl
+  hf_dataset_path: data/nl_5h/nl
   train_split: train
   val_split: validation
   test_split: test
@@ -118,7 +118,7 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_Dutch_ABLATIONS_LoRA
-  wandb_exp_name: eval_whisper-s_ablation_9L_lora
+  wandb_project_name: SLAM_ASR_Dutch_5h_ABLATIONS_LoRA
+  wandb_exp_name: eval_whisper-s_dutch_ablation_9L_lora_5h
   log_dir: ./logs
-  log_filename: eval_ablation_9L_lora_nl.log
+  log_filename: eval_ablation_9L_nl-5h.log
