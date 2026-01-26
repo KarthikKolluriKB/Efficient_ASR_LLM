@@ -225,6 +225,21 @@ class ASRLLM(nn.Module):
         self.label_smoothing = getattr(train_config, 'label_smoothing', 0.0)
         if self.label_smoothing > 0:
             logger.info(f"Label smoothing enabled: {self.label_smoothing}")
+        
+        # =========================================================================
+        # NEW: Frozen projector mode for Experiment-1 (Random Projector + LoRA)
+        # =========================================================================
+        # When freeze_projector=True and use_lora=True, we need special handling
+        # to ensure gradients flow to LoRA parameters even though projector is frozen
+        # =========================================================================
+        self.freeze_projector = getattr(train_config, 'freeze_projector', False)
+        self.use_lora = getattr(train_config, 'use_lora', False)
+        
+        if self.freeze_projector and self.use_lora:
+            logger.info("=" * 60)
+            logger.info("EXPERIMENT-1 MODE DETECTED")
+            logger.info("Frozen Projector + LoRA: Special gradient handling enabled")
+            logger.info("=" * 60)
 
 
     def forward(
@@ -278,19 +293,16 @@ class ASRLLM(nn.Module):
         # This is the correct mixed precision pattern.
 
         # 2. Projector (Project to LLM embedding space)
-        projector_type = self.model_config.projector.lower() if self.model_config.projector else ""
-        
-        if projector_type in ["q-former", "qformer"]:
-            # Q-former
-            encoder_outputs = self.projector(encoder_outputs, audio_mel_post_mask) # [B, T_enc_proj, D_llm]
-
-        elif projector_type in ["linear", "concatlinear", "cov1d-linear", "conv1d-linear", "cov1d", "conv1d"]:
-            # linear or conv1d + linear
-            encoder_outputs = self.projector(encoder_outputs)  # [B, T_enc_proj, D_llm]
+        # =========================================================================
+        # MODIFIED: Handle frozen projector case for Experiment-1
+        # =========================================================================
+        if self.freeze_projector:
+            # Frozen projector: run without gradients
+            with torch.no_grad():
+                encoder_outputs = self._apply_projector(encoder_outputs, audio_mel_post_mask)
         else:
-            # Fallback - just run projector if it exists
-            if self.projector is not None:
-                encoder_outputs = self.projector(encoder_outputs)
+            # Normal case: projector is trainable
+            encoder_outputs = self._apply_projector(encoder_outputs, audio_mel_post_mask)
         
         # DEBUG: Print projected shape
         debug_key2 = f"_debug_proj_{labels is not None}"
@@ -373,6 +385,35 @@ class ASRLLM(nn.Module):
         if kwargs.get("inference_mode", False): 
             return inputs_embeds, attention_mask
         
+        # =========================================================================
+        # CRITICAL FIX FOR EXPERIMENT-1: Frozen Projector + LoRA Training
+        # =========================================================================
+        # When projector is frozen, inputs_embeds doesn't have requires_grad=True
+        # because no trainable parameters contributed to its computation.
+        # This breaks gradient flow to LoRA parameters in the LLM.
+        #
+        # Solution: Enable gradients on inputs_embeds so LoRA can receive gradients.
+        # This is safe because:
+        # 1. We're not updating encoder/projector (they're frozen)
+        # 2. Gradients will only flow to LoRA parameters in the LLM
+        # 3. This doesn't change the forward pass values, only enables backprop
+        # =========================================================================
+        if self.training and self.freeze_projector and self.use_lora:
+            if not inputs_embeds.requires_grad:
+                # Check if LLM has trainable parameters (LoRA)
+                llm_has_trainable = any(p.requires_grad for p in self.llm.parameters())
+                if llm_has_trainable:
+                    # Enable gradients on embeddings to allow backprop to LoRA
+                    inputs_embeds = inputs_embeds.detach()
+                    inputs_embeds.requires_grad_(True)
+                    
+                    # Debug: Only print once
+                    debug_key_grad = "_debug_grad_fix_applied"
+                    if not hasattr(self, debug_key_grad):
+                        print("[DEBUG MODEL] Exp-1 gradient fix: enabled requires_grad on inputs_embeds for LoRA training")
+                        setattr(self, debug_key_grad, True)
+        # =========================================================================
+        
         # Default path for training / evaluation
         # Explicitly disable KV cache to prevent memory accumulation during training
         
@@ -445,6 +486,28 @@ class ASRLLM(nn.Module):
                 del preds, labels_cpu, logits_cpu
 
         return model_outputs, metrics
+    
+    
+    def _apply_projector(self, encoder_outputs, audio_mel_post_mask):
+        """
+        Apply the projector to encoder outputs.
+        Separated into a helper method for cleaner frozen/unfrozen handling.
+        """
+        projector_type = self.model_config.projector.lower() if self.model_config.projector else ""
+        
+        if projector_type in ["q-former", "qformer"]:
+            # Q-former
+            encoder_outputs = self.projector(encoder_outputs, audio_mel_post_mask)
+        elif projector_type in ["linear", "concatlinear", "cov1d-linear", "conv1d-linear", "cov1d", "conv1d"]:
+            # linear or conv1d + linear
+            encoder_outputs = self.projector(encoder_outputs)
+        else:
+            # Fallback - just run projector if it exists
+            if self.projector is not None:
+                encoder_outputs = self.projector(encoder_outputs)
+        
+        return encoder_outputs
+    
     
     @torch.no_grad()
     def generate(self,
