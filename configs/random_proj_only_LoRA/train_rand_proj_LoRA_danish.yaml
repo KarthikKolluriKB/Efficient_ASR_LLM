@@ -1,0 +1,165 @@
+# =============================================================================
+# Random Frozen Projector + LoRA Training
+# Language: Danish (~4.2 hours, low-resource)
+# =============================================================================
+#
+# USAGE:
+#   python train.py --config configs/rand_proj_LoRA/train_rand_proj_LoRA_danish.yaml
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Model Configuration
+# -----------------------------------------------------------------------------
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+
+  # LLM settings
+  llm_model_name: qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
+  llm_dim: 2048
+  llm_model_path: null
+  llm_type: decoder_only
+
+  # Encoder settings (Whisper-small baseline)
+  encoder_model_name: whisper-small
+  encoder_model: small
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_dim: 768
+  encoder_num_layers: null  # Full 12-layer baseline
+
+  # Projector settings (will be FROZEN with random weights)
+  projector: concatLinear
+  projector_ds_rate: 5
+  projector_hidden_dim: 2048
+  projector_dropout: 0.1
+  modal: audio
+  normalize: false
+  encoder_type: finetune
+
+
+# -----------------------------------------------------------------------------
+# Training Configuration
+# -----------------------------------------------------------------------------
+train:
+  model_name: ASRLLM
+  run_validation: true
+  
+  # Batch Configuration
+  batch_size: 4
+  val_batch_size: 8
+  gradient_accumulation_steps: 1
+  num_workers: 4
+  max_eval_batches: 200
+  
+  # Generation Configuration
+  max_new_tokens: 128
+  repetition_penalty: 1.5
+  
+  # Training Schedule
+  num_epochs: 10
+  total_steps: 8980
+  warmup_steps: 449
+  validation_interval: 449
+  
+  # Optimizer Configuration
+  lr: 1.0e-4
+  weight_decay: 0.01
+  grad_clip: 1.0
+  gamma: 0.85
+
+  # Precision Configuration
+  use_fp16: false
+  mixed_precision: true
+  quantization: false
+  
+  # =========================================================================
+  # CRITICAL: Freezing Configuration 
+  # =========================================================================
+  freeze_encoder: true      # Encoder always frozen
+  freeze_llm: false         # Must be false for LoRA to work
+  freeze_projector: true    # KEY CHANGE: Projector frozen with random weights!
+  num_freeze_layers: 0
+  # =========================================================================
+
+  # Output Configuration
+  output_dir: outputs/danish/rand_proj_LoRA/
+  save_model: true
+  seed: 42
+
+  # Other Configuration
+  one_gpu: true
+  use_peft: true
+  use_fast_kernels: false
+  batching_strategy: packing
+  context_length: 384
+  
+  # LoRA Configuration
+  use_lora: true
+  lora:
+    r: 8
+    alpha: 16
+    dropout: 0.1
+    target_modules:
+      - q_proj
+      - v_proj
+      - k_proj
+      - o_proj
+  
+ 
+# -----------------------------------------------------------------------------
+# Learning Rate Scheduler
+# -----------------------------------------------------------------------------
+scheduler:
+  name: cosine_with_warmup
+  total_training_steps: 8980
+  warmup_steps: 449
+  min_lr_ratio: 0.1
+
+
+# -----------------------------------------------------------------------------
+# Early Stopping
+# -----------------------------------------------------------------------------
+early_stopping:
+  monitor: val/wer
+  mode: min
+  patience: 6
+  min_delta: 0.001
+
+
+# -----------------------------------------------------------------------------
+# Data Configuration (Danish - Low Resource ~4.2 hours)
+# -----------------------------------------------------------------------------
+data:
+  dataset: speech_dataset
+  file: datamodule/dataset.py:get_speech_dataset
+  hf_dataset_path: data/cv22_hf/da
+  train_split: train
+  val_split: validation
+  test_split: test
+  use_raw_transcription: false
+  input_type: mel
+  mel_size: 80
+  normalize: false
+  projector_ds_rate: 5
+  use_variable_length: true
+  max_audio_length: 30
+  fix_length_audio: -1
+  max_target_chars: 500
+  inference_mode: false
+
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+log:
+  use_wandb: true
+  wandb_dir: ./wandb
+  wandb_entity_name: null
+  wandb_project_name: SLAM_ASR_Rand_Proj_LoRA
+  wandb_exp_name: danish_rand_proj_LoRA
+  log_dir: ./logs
+  log_filename: danish_rand_proj_LoRA.log
+  log_interval: 10

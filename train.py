@@ -284,6 +284,50 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     return val_loss, val_acc, val_wer_score, val_cer_score, val_word_acc, all_hyp_texts, all_ref_texts
 
 
+def print_trainable_parameters(model, logger):
+    """Print detailed breakdown of trainable vs frozen parameters."""
+    trainable_params = 0
+    frozen_params = 0
+    
+    logger.info("=" * 60)
+    logger.info("PARAMETER BREAKDOWN BY MODULE")
+    logger.info("=" * 60)
+    
+    # Encoder
+    enc_trainable = sum(p.numel() for p in model.encoder.parameters() if p.requires_grad)
+    enc_frozen = sum(p.numel() for p in model.encoder.parameters() if not p.requires_grad)
+    logger.info(f"Encoder:    Trainable={enc_trainable:>12,} | Frozen={enc_frozen:>12,}")
+    trainable_params += enc_trainable
+    frozen_params += enc_frozen
+    
+    # Projector
+    proj_trainable = sum(p.numel() for p in model.projector.parameters() if p.requires_grad)
+    proj_frozen = sum(p.numel() for p in model.projector.parameters() if not p.requires_grad)
+    logger.info(f"Projector:  Trainable={proj_trainable:>12,} | Frozen={proj_frozen:>12,}")
+    trainable_params += proj_trainable
+    frozen_params += proj_frozen
+    
+    # LLM
+    llm_trainable = sum(p.numel() for p in model.llm.parameters() if p.requires_grad)
+    llm_frozen = sum(p.numel() for p in model.llm.parameters() if not p.requires_grad)
+    logger.info(f"LLM:        Trainable={llm_trainable:>12,} | Frozen={llm_frozen:>12,}")
+    trainable_params += llm_trainable
+    frozen_params += llm_frozen
+    
+    logger.info("-" * 60)
+    logger.info(f"TOTAL:      Trainable={trainable_params:>12,} | Frozen={frozen_params:>12,}")
+    logger.info(f"            ({100*trainable_params/(trainable_params+frozen_params):.2f}% trainable)")
+    logger.info("=" * 60)
+    
+    # List trainable parameter names (for verification)
+    logger.info("\nTrainable parameter names:")
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            logger.info(f"  {name}: {param.numel():,}")
+    
+    return trainable_params, frozen_params
+
+
 def main(): 
     """
     Main training loop for training the projector module.
@@ -294,7 +338,6 @@ def main():
     parser = argparse.ArgumentParser() 
     parser.add_argument("--config", type=str, default="configs/config.yaml", required=True, help="Path to the config file.")
     args = parser.parse_args() 
-    #args = argparse.Namespace( config='configs/config.yaml')
 
     # load YAML into an OmegaConf dict
     cfg = OmegaConf.load(args.config)
@@ -329,10 +372,25 @@ def main():
         model.llm.gradient_checkpointing_enable()
         logger.info("Enabled gradient checkpointing for LLM (reduces memory usage)")
 
-    # Freeze modules per config
+    # =========================================================================
+    # FREEZING CONFIGURATION
+    # =========================================================================
+    
+    # Freeze encoder per config
     if cfg.train.freeze_encoder:
         for p in model.encoder.parameters():
             p.requires_grad = False
+        logger.info("Encoder: FROZEN")
+
+    # Freeze projector per config
+    freeze_projector = getattr(cfg.train, 'freeze_projector', False)
+    if freeze_projector:
+        for p in model.projector.parameters():
+            p.requires_grad = False
+        logger.info("=" * 60)
+        logger.info("PROJECTOR FROZEN (Random Weights)")
+        logger.info("Only LoRA parameters will be trained!")
+        logger.info("=" * 60)
     
     # Check if LoRA is enabled
     use_lora = getattr(cfg.train, 'use_lora', False)
@@ -343,8 +401,11 @@ def main():
         for p in model.llm.parameters():
             p.requires_grad = False
 
-    # Collect trainable parameters
-    # Projector parameters
+    # =========================================================================
+    # COLLECT TRAINABLE PARAMETERS
+    # =========================================================================
+    
+    # Projector parameters (only if not frozen)
     projector_params = [p for p in model.projector.parameters() if p.requires_grad]
     
     # LoRA parameters (if enabled)
@@ -355,18 +416,40 @@ def main():
                 lora_params.append(p)
         logger.info(f"LoRA trainable parameters: {sum(p.numel() for p in lora_params):,}")
     
+    # Print detailed parameter breakdown
+    print_trainable_parameters(model, logger)
+    
+    # Validate: For Exp-1, we need LoRA but no projector training
+    if freeze_projector:
+        if not use_lora:
+            raise ValueError("freeze_projector=True requires use_lora=True! "
+                           "Otherwise no parameters will be trained.")
+        if len(projector_params) > 0:
+            raise ValueError("Projector has trainable params despite freeze_projector=True!")
+        if len(lora_params) == 0:
+            raise ValueError("No LoRA parameters found! Check use_lora and lora config.")
+        logger.info(f"validation PASSED: {len(lora_params)} LoRA params, 0 projector params")
+    
     # Setup optimizer with parameter groups
     # Use different learning rates for projector and LoRA if specified
     lora_lr_multiplier = getattr(cfg.train, 'lora_lr_multiplier', 1.0)
     
     if use_lora and lora_params:
-        # Use parameter groups with potentially different learning rates
-        param_groups = [
-            {"params": projector_params, "lr": cfg.train.lr, "name": "projector"},
-            {"params": lora_params, "lr": cfg.train.lr * lora_lr_multiplier, "name": "lora"}
-        ]
-        optimizer = torch.optim.AdamW(param_groups, weight_decay=cfg.train.weight_decay)
-        logger.info(f"Optimizer: AdamW with projector_lr={cfg.train.lr}, lora_lr={cfg.train.lr * lora_lr_multiplier}")
+        if projector_params:
+            # Both projector and LoRA are trainable
+            param_groups = [
+                {"params": projector_params, "lr": cfg.train.lr, "name": "projector"},
+                {"params": lora_params, "lr": cfg.train.lr * lora_lr_multiplier, "name": "lora"}
+            ]
+            optimizer = torch.optim.AdamW(param_groups, weight_decay=cfg.train.weight_decay)
+            logger.info(f"Optimizer: AdamW with projector_lr={cfg.train.lr}, lora_lr={cfg.train.lr * lora_lr_multiplier}")
+        else:
+            # Only LoRA is trainable (Exp-1 mode)
+            param_groups = [
+                {"params": lora_params, "lr": cfg.train.lr * lora_lr_multiplier, "name": "lora"}
+            ]
+            optimizer = torch.optim.AdamW(param_groups, weight_decay=cfg.train.weight_decay)
+            logger.info(f"Optimizer: AdamW with lora_lr={cfg.train.lr * lora_lr_multiplier} (LoRA ONLY)")
     else:
         # Original behavior: only projector parameters
         optimizer = torch.optim.AdamW(projector_params, lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
@@ -449,134 +532,81 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
 
     logger.info(f"Train dataset: {len(train_ds)} samples, {len(train_dataloader)} batches (batch_size={cfg.train.batch_size})")
 
-    # Validation dataloader 
-    val_split = cfg.data.get("val_split", "dev")
-    vald_ds = get_speech_dataset(cfg.data, tokenizer, split=val_split)
+    # Validation set
+    val_split = cfg.data.get("val_split", "validation")
+    val_ds = get_speech_dataset(cfg.data, tokenizer, split=val_split)
     val_dataloader = DataLoader(
-        vald_ds, 
-        batch_size=cfg.train.val_batch_size,
+        val_ds,
+        batch_size=cfg.train.val_batch_size if hasattr(cfg.train, 'val_batch_size') else cfg.train.batch_size,
         shuffle=False,
-        collate_fn=vald_ds.collator,
+        collate_fn=val_ds.collator,
         num_workers=cfg.train.num_workers,
         pin_memory=(device == "cuda"),
         persistent_workers=True if cfg.train.num_workers > 0 else False
     )
+    logger.info(f"Val dataset: {len(val_ds)} samples, {len(val_dataloader)} batches")
 
-    logger.info(f"Validation dataset: {len(vald_ds)} samples, {len(val_dataloader)} batches")
-    logger.info(f"Log interval: {cfg.log.log_interval} steps")  # Debug: verify log interval
-
-    # W&B init 
-    run = None 
+    # Initialize Weights & Biases (wandb)
+    run = None
     if cfg.log.use_wandb:
-        import wandb
-        
-        logger.info(f"Attempting to initialize W&B: project={cfg.log.wandb_project_name}, entity={cfg.log.wandb_entity_name}")
-        
         run = init_wandb(
-            use_wand=True, 
+            use_wand=cfg.log.use_wandb,
             project=cfg.log.wandb_project_name,
             run_name=cfg.log.wandb_exp_name,
-            tags=[cfg.model.llm_model_name, cfg.model.encoder_model_name, cfg.model.projector, "projector-only"],
-            entity=cfg.log.wandb_entity_name,
-            config=OmegaConf.to_container(cfg, resolve=True)
+            tags=["asr-llm", "projector-training"],
+            config=OmegaConf.to_container(cfg, resolve=True),
         )
-        
-        if run is not None:
-            logger.info(f"Initialized W&B run: {run.url}")
-        else:
-            logger.warning("W&B initialization failed - run is None")
-        
-        # Log efficiency metrics to W&B summary (for comparing runs in table view)
-        if run is not None:
-            run.summary["efficiency/encoder_layers_used"] = encoder_params['num_layers_used']
-            run.summary["efficiency/encoder_layers_total"] = encoder_params['num_layers_total']
-            run.summary["efficiency/encoder_params_used_M"] = round(encoder_params['used_params'] / 1e6, 2)
-            run.summary["efficiency/encoder_params_pruned_M"] = round(encoder_params['pruned_params'] / 1e6, 2)
-            run.summary["efficiency/param_reduction_pct"] = round(encoder_params['pruned_params'] / encoder_params['total_params'] * 100, 1)
-            
-            # Log efficiency metrics as W&B Table (textual display in dashboard)
-            efficiency_table = wandb.Table(
-                columns=["Metric", "Value"],
-                data=[
-                    ["Whisper Model", f"whisper-{cfg.model.encoder_model}"],
-                    ["Encoder Layers", f"{encoder_params['num_layers_used']} / {encoder_params['num_layers_total']}"],
-                    ["Layer Reduction", f"{100 - (encoder_params['num_layers_used']/encoder_params['num_layers_total']*100):.1f}%"],
-                    ["─────────────", "─────────────"],
-                    ["Total Encoder Params", f"{encoder_params['total_params']/1e6:.2f}M"],
-                    ["Used Encoder Params", f"{encoder_params['used_params']/1e6:.2f}M"],
-                    ["Pruned Encoder Params", f"{encoder_params['pruned_params']/1e6:.2f}M"],
-                    ["Param Reduction", f"{encoder_params['pruned_params']/encoder_params['total_params']*100:.1f}%"],
-                    ["─────────────", "─────────────"],
-                    ["Conv Params", f"{encoder_params['conv_params']/1e6:.2f}M"],
-                    ["Positional Embedding", f"{encoder_params['pos_embedding_params']/1e6:.2f}M"],
-                    ["Params per Block", f"{encoder_params['block_params_per_layer']/1e6:.2f}M"],
-                ]
-            )
-            run.log({"efficiency/model_config": efficiency_table})
-            
-            # Also log as text artifact for easy reference
-            run.log({"efficiency/summary_text": wandb.Html(f"<pre>{efficiency_summary}</pre>")})
-
-    # Mixed precision and scaler
-    use_autocast = bool(cfg.train.mixed_precision and device == "cuda")
+        logger.info(f"Initialized wandb run: {run.url}")
+    
+    # Mixed precision
+    use_autocast = bool(cfg.train.mixed_precision)
     amp_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
+    scaler = torch.amp.GradScaler(enabled=(use_autocast and amp_dtype == torch.float16))
+    enc_dtype = amp_dtype if use_autocast else torch.float32
+    logger.info(f"Mixed precision: {use_autocast}, dtype={amp_dtype}, encoder_dtype={enc_dtype}")
 
-    # Grad Scaler for mixed precision (only needed for float16, not bfloat16)
-    use_scaler = bool(cfg.train.use_fp16) and amp_dtype == torch.float16
-    scaler = torch.amp.GradScaler(enabled=use_scaler)
-
-    # Match Whisper encoder parameters dtype (prevent type mismatch)
-    enc_dtype = next(model.encoder.parameters()).dtype
-
-    # Early stopping from config
+    # Early stopping
     early_stop = None
-    if hasattr(cfg, 'early_stopping') and cfg.early_stopping is not None:
-        early_stop = EarlyStopChecker(
-            mode=cfg.early_stopping.get('mode', 'min'),
-            patience=cfg.early_stopping.get('patience', 5),
-            min_delta=cfg.early_stopping.get('min_delta', 0.001)
-        )
-        logger.info(f"Early stopping enabled: patience={early_stop.patience}, min_delta={early_stop.min_delta}")
-
+    if hasattr(cfg, "early_stopping") and cfg.early_stopping is not None:
+        patience = cfg.early_stopping.get("patience", 5)
+        min_delta = cfg.early_stopping.get("min_delta", 0.001)
+        early_stop = EarlyStopChecker(mode="min", patience=patience, min_delta=min_delta)
+        logger.info(f"Early stopping enabled: patience={patience}, min_delta={min_delta}")
+    
     # Training loop
     global_step = 0
-    best_val_loss = float("inf")
-    best_val_wer = float("inf")
-    best_val_cer = float("inf")
+    best_val_wer, best_val_cer = float("inf"), float("inf")
     best_train_wer = float("inf")
-    best_train_cer = float("inf")
     best_val_path = None
-    training_start_time = time.time()  # Total training time
-    log_interval_start = time.time()   # Per-interval timing
-    model.train()
+    training_start_time = time.time()
+    log_interval_start = time.time()
 
-    logger.info("Starting training...")
+    logger.info("=" * 60)
+    logger.info("STARTING TRAINING")
+    if freeze_projector:
+        logger.info("MODE: Experiment-1 (Random Frozen Projector + LoRA Only)")
+    else:
+        logger.info("MODE: Standard Training (Projector + optional LoRA)")
+    logger.info("=" * 60)
 
-    for epoch in range(cfg.train.num_epochs):
-        for step, batch in enumerate(train_dataloader):
-            # Incrementing global step 
+    for epoch in range(cfg.train.num_epochs): 
+        model.train()
+        
+        for batch_idx, batch in enumerate(train_dataloader):
+            optimizer.zero_grad()
             global_step += 1
 
-            # DEBUG: Print shapes on first step
-            if global_step == 1:
-                print(f"\n[DEBUG TRAIN] input_ids shape: {batch['input_ids'].shape}")
-                print(f"[DEBUG TRAIN] audio_mel shape: {batch['audio_mel'].shape}")
-                print(f"[DEBUG TRAIN] attention_mask shape: {batch['attention_mask'].shape}")
+            # Move batch data to device
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            audio_mel = batch["audio_mel"].to(device).to(enc_dtype)
+            modality_mask = batch['modality_mask'].to(device)
 
-            # Move batch to device
-            input_ids = batch["input_ids"].to(device, non_blocking=True)
-            attention_mask = batch["attention_mask"].to(device, non_blocking=True)
-            labels = batch["labels"].to(device, non_blocking=True)
-            audio_mel = batch["audio_mel"].to(device, non_blocking=True).to(enc_dtype)
-            modality_mask = batch['modality_mask'].to(device, non_blocking=True)
-
-            # Optimizer zero grad
-            optimizer.zero_grad(set_to_none=True)
-
+            # Forward pass with autocast
             if use_autocast:
-                with torch.autocast(device_type=device, dtype=amp_dtype): 
-                    # Forward pass
-                    outputs, metrics = model(
+                with torch.autocast(device_type="cuda", dtype=amp_dtype):
+                    outputs, metrics = model.forward(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         labels=labels,
@@ -584,10 +614,8 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
                         modality_mask=modality_mask
                     )
                     loss = outputs.loss
-                    
-            else: 
-                # Forward pass
-                outputs = model(
+            else:
+                outputs, metrics = model.forward(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     labels=labels,
@@ -596,14 +624,9 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
                 )
                 loss = outputs.loss
 
-            # Accuracy for logging
-            acc = 0.0
-            batch_wer = 0.0
-            if metrics is not None:
-                if "acc" in metrics:
-                    acc = metrics["acc"]
-                if "wer" in metrics:
-                    batch_wer = metrics["wer"]
+            # Get metrics
+            batch_wer = metrics.get("wer", -1.0)
+            acc = metrics.get("acc", 0.0)
 
             # Word-level accuracy
             word_acc = 1.0 - batch_wer if batch_wer >= 0.0 else 0.0
@@ -742,6 +765,8 @@ Param Reduction:    {(encoder_params['pruned_params']/encoder_params['total_para
     logger.info("=" * 60)
     logger.info("TRAINING SUMMARY (for Excel reporting)")
     logger.info("=" * 60)
+    if freeze_projector:
+        logger.info("EXPERIMENT MODE: Random Frozen Projector + LoRA Only")
     logger.info(f"Best Training WER: {best_train_wer:.4f} ({best_train_wer*100:.2f}%)")
     logger.info(f"Best Validation WER: {best_val_wer:.4f} ({best_val_wer*100:.2f}%)")
     logger.info(f"Best Validation CER: {best_val_cer:.4f} ({best_val_cer*100:.2f}%)")
@@ -773,4 +798,3 @@ if __name__ == "__main__":
         sys.argv = ['train.py', '--config', 'configs/test_config.yaml']
     
     main()
-
