@@ -59,10 +59,10 @@ train:
   repetition_penalty: 1.5
   
   # Training Schedule
-  num_epochs: 12
-  total_steps: 10776
-  warmup_steps: 539
-  validation_interval: 539
+  num_epochs: 15
+  total_steps: 13470 
+  warmup_steps: 673
+  validation_interval: 673
   
   # Optimizer Configuration
   lr: 1.0e-4
@@ -76,13 +76,13 @@ train:
   quantization: false
   
   # Freezing Configuration (Projector-Only Training)
-  freeze_llm: false
+  freeze_llm: true
   freeze_encoder: true
   freeze_layers: false
   num_freeze_layers: 0
   
   # Output Configuration
-  output_dir: outputs/danish/whisper-s_baseline_lora_test/
+  output_dir: outputs/danish/whisper-s_baseline_lora_test2/
   save_model: true
   seed: 42
   
@@ -92,6 +92,18 @@ train:
   use_fast_kernels: false
   batching_strategy: packing
   context_length: 384
+
+scheduler:
+  name: cosine_with_warmup
+  total_training_steps: 13470
+  warmup_steps: 673
+  min_lr_ratio: 0.1
+
+early_stopping:
+  monitor: val/wer
+  mode: min
+  patience: 8
+  min_delta: 0.005
 
   # LoRA Configuration
   use_lora: true
@@ -104,19 +116,6 @@ train:
       - v_proj
       - k_proj
       - o_proj
-
-
-scheduler:
-  name: cosine_with_warmup
-  total_training_steps: 10776
-  warmup_steps: 539
-  min_lr_ratio: 0.1
-
-early_stopping:
-  monitor: val/wer
-  mode: min
-  patience: 8
-  min_delta: 0.001
 
 data:
   dataset: speech_dataset
@@ -141,7 +140,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_Danish_ABLATIONS_LoRA_ME
-  wandb_exp_name: whisper-s_baseline_lora_test
+  wandb_exp_name: whisper-s_baseline_lora_test_2
   log_dir: ./logs
-  log_filename: whisper-s_baseline_lora_test.log
+  log_filename: whisper-s_baseline_lora_test_2.log
   log_interval: 100
