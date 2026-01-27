@@ -1,18 +1,12 @@
 # =============================================================================
-# Experiment 1: Baseline - Whisper-small 12 Layers (All) + LoRA + More Epochs 
+# Config: Projector + LoRA Training (12 Encoder Layers)
 # =============================================================================
-# Training config for Danish Common Voice with LoRA fine-tuning
-# Whisper-small (all 12 encoder layers) + Qwen2.5-3B (LoRA) + concatLinear projector
-
-# Calculation:
-#   - samples: 3592
-#   - batch_size: 4
-#   - steps_per_epoch: 3592 / 4 = 898
-#   - num_epochs: 12
-#   - total_steps: 898 × 12 = 10776
-#   - warmup_steps: 5% of total = 539
-#   - validation_interval: 5% of steps_per_epoch = 5% of 10776 = 539
-
+# 
+# Training Mode: Projector and LoRA adapters are trained
+# - Encoder: Frozen
+# - Projector: Trainable
+# - LLM: Base weights frozen, LoRA adapters trainable
+#
 # =============================================================================
 
 model:
@@ -32,7 +26,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: null        # null = all 12 layers
+  encoder_num_layers: null        # null = all layers
   
   # Projector Configuration
   projector: concatLinear
@@ -60,29 +54,42 @@ train:
   
   # Training Schedule
   num_epochs: 15
-  total_steps: 13470 
+  total_steps: 13470
   warmup_steps: 673
-  validation_interval: 673
   
   # Optimizer Configuration
   lr: 1.0e-4
   weight_decay: 0.01
   grad_clip: 1.0
-  gamma: 0.85
+  lora_lr_multiplier: 1.0         # LoRA LR = lr * multiplier
   
   # Precision Configuration
   use_fp16: false
   mixed_precision: true
   quantization: false
   
-  # Freezing Configuration (Projector-Only Training)
-  freeze_llm: true
-  freeze_encoder: true
-  freeze_layers: false
-  num_freeze_layers: 0
+  # ==========================================================================
+  # FREEZING CONFIGURATION - Projector + LoRA
+  # ==========================================================================
+  freeze_encoder: true      # Whisper encoder is frozen
+  freeze_llm: true          # Ignored when use_lora=true (PEFT handles it)
+  use_lora: true            # Enable LoRA on LLM
+  
+  # LoRA Configuration
+  # IMPORTANT: This must be inside the 'train:' section!
+  lora:
+    r: 8                    # LoRA rank (higher = more params, more capacity)
+    alpha: 16               # LoRA alpha (scaling factor, typically 2*r)
+    dropout: 0.1            # LoRA dropout for regularization
+    target_modules:         # Which layers to apply LoRA to
+      - q_proj
+      - v_proj
+      - k_proj
+      - o_proj
+  # ==========================================================================
   
   # Output Configuration
-  output_dir: outputs/danish/whisper-s_baseline_lora_test2/
+  output_dir: outputs/whisper_small/danish/LoRA/whisper-s_baseline_lora_final/
   save_model: true
   seed: 42
   
@@ -102,20 +109,8 @@ scheduler:
 early_stopping:
   monitor: val/wer
   mode: min
-  patience: 8
+  patience: 5
   min_delta: 0.005
-
-  # LoRA Configuration
-  use_lora: true
-  lora:
-    r: 8
-    alpha: 16
-    dropout: 0.1
-    target_modules:
-      - q_proj
-      - v_proj
-      - k_proj
-      - o_proj
 
 data:
   dataset: speech_dataset
@@ -139,8 +134,8 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_Danish_ABLATIONS_LoRA_ME
-  wandb_exp_name: whisper-s_baseline_lora_test_2
+  wandb_project_name: SLAM_ASR_Danish
+  wandb_exp_name: whisper-s_baseline_lora_final
   log_dir: ./logs
-  log_filename: whisper-s_baseline_lora_test_2.log
+  log_filename: whisper-s_baseline_lora_final.log
   log_interval: 100

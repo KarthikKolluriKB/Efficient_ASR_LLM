@@ -1,17 +1,26 @@
+"""
+SLAM-ASR Model: Speech-Language Model for Automatic Speech Recognition
+
+Architecture:
+    - Encoder: Whisper (frozen or trainable)
+    - Projector: Maps encoder outputs to LLM embedding space (trainable)
+    - LLM: Qwen2.5-3B (frozen, or LoRA fine-tuned)
+
+Training Modes:
+    1. Projector-only: freeze_encoder=true, freeze_llm=true, use_lora=false
+    2. Projector + LoRA: freeze_encoder=true, use_lora=true
+"""
+
 import os 
 import types 
 import torch 
-import soundfile as sf
 import torch.nn as nn
 import logging 
 from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
-import torch.distributed as dist
 from typing import List, Optional, Tuple, Union
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, AutoModel
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
-from peft import PeftModel, PeftConfig
-
 
 from models.encoder import WhisperWrappedEncoder
 from utils.metrics import compute_accuracy, compute_wer, decode_texts_from_outputs
@@ -21,22 +30,31 @@ logger = logging.getLogger(__name__)
 
 
 def model_builder(train_config, model_config, **kwargs):
-    """"""
-    # 1. tokenizer
+    """
+    Build the complete SLAM-ASR model.
+    
+    Args:
+        train_config: Training configuration (from cfg.train)
+        model_config: Model configuration (from cfg.model)
+        **kwargs: Additional arguments (e.g., ckpt_path for loading weights)
+    
+    Returns:
+        model: ASRLLM model
+        tokenizer: Tokenizer for the LLM
+    """
+    # 1. Tokenizer
     tokenizer = setup_tokenizer(train_config, model_config, **kwargs)
 
-    # 2. encoder 
+    # 2. Encoder (Whisper)
     encoder = setup_encoder(train_config, model_config, **kwargs)
 
-    # 3. llm 
+    # 3. LLM (with optional LoRA)
     llm = setup_llm(train_config, model_config, **kwargs)
 
-    # 4. projector - Keep in FP32 for stable training
-    # The autocast in train.py will handle mixed precision during forward/backward
-    # Optimizer will maintain FP32 weights for precise gradient accumulation
-    projector = setup_projector(train_config, model_config, **kwargs)  # FP32
+    # 4. Projector (always in FP32 for stable training)
+    projector = setup_projector(train_config, model_config, **kwargs)
 
-    # 5. model
+    # 5. Assemble model
     model = ASRLLM(
         encoder,
         llm,
@@ -47,23 +65,22 @@ def model_builder(train_config, model_config, **kwargs):
         **kwargs
     )
 
-    # load ckpt 
+    # Load checkpoint if provided
     ckpt_path = kwargs.get("ckpt_path", None) 
     if ckpt_path is not None:
-        logger.info(f"Load checkpoint from {ckpt_path}")
-        ckpt_dir = torch.load(ckpt_path, map_location="cpu")
+        logger.info(f"Loading checkpoint from {ckpt_path}")
+        ckpt_dict = torch.load(ckpt_path, map_location="cpu")
         
         # Load projector weights
-        if 'projector' in ckpt_dir:
-            model.projector.load_state_dict(ckpt_dir['projector'], strict=True)
+        if 'projector' in ckpt_dict:
+            model.projector.load_state_dict(ckpt_dict['projector'], strict=True)
             logger.info("Loaded projector weights from checkpoint")
         
-        # Load LoRA weights if present and LoRA is enabled
+        # Load LoRA weights if present
         use_lora = getattr(train_config, 'use_lora', False)
-        if use_lora and 'lora' in ckpt_dir:
+        if use_lora and 'lora' in ckpt_dict:
             try:
-                # Load LoRA adapter weights
-                model.llm.load_state_dict(ckpt_dir['lora'], strict=False)
+                model.llm.load_state_dict(ckpt_dict['lora'], strict=False)
                 logger.info("Loaded LoRA adapter weights from checkpoint")
             except Exception as e:
                 logger.warning(f"Could not load LoRA weights: {e}")
@@ -74,70 +91,91 @@ def model_builder(train_config, model_config, **kwargs):
 
 
 def setup_tokenizer(train_config, model_config, **kwargs):
-    # Load the tokenizer and special tokens
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_config.llm_model
-    )
+    """Setup tokenizer for the LLM."""
+    tokenizer = AutoTokenizer.from_pretrained(model_config.llm_model)
     tokenizer.pad_token_id = tokenizer.eos_token_id
     return tokenizer
 
 
 def setup_encoder(train_config, model_config, **kwargs):
+    """
+    Setup Whisper encoder.
     
-    # whisper encoder
+    Freezing is handled here based on train_config.freeze_encoder.
+    """
     encoder_name = model_config.encoder_model_name
-    
     encoder = WhisperWrappedEncoder.load(model_config)
-
     print_module_size(encoder, encoder_name)
 
+    # Freeze encoder if specified
     if train_config.freeze_encoder:
         for name, params in encoder.named_parameters():
             params.requires_grad = False
         encoder.eval()
+        logger.info("Encoder: FROZEN")
+    else:
+        logger.info("Encoder: TRAINABLE")
+    
     print_module_size(encoder, encoder_name)
-
     return encoder
 
 
 def setup_llm(train_config, model_config, **kwargs):
+    """
+    Setup LLM with optional LoRA.
     
+    Training modes:
+        1. use_lora=True: Apply LoRA adapters (PEFT auto-freezes base params)
+        2. use_lora=False, freeze_llm=True: Freeze all LLM params
+        3. use_lora=False, freeze_llm=False: Full LLM fine-tuning (expensive!)
+    """
+    # Load base model
     model = AutoModelForCausalLM.from_pretrained(
-            model_config.llm_model,
-            torch_dtype=torch.bfloat16 if train_config.mixed_precision else torch.float32,
-            attn_implementation="sdpa",
-            load_in_8bit=True if train_config.quantization else None,
-            device_map="auto" if train_config.quantization else None,
+        model_config.llm_model,
+        torch_dtype=torch.bfloat16 if train_config.mixed_precision else torch.float32,
+        attn_implementation="sdpa",
+        load_in_8bit=True if train_config.quantization else None,
+        device_map="auto" if train_config.quantization else None,
     )
-
     print_module_size(model, model_config.llm_model_name)
 
+    # Prepare for quantized training if needed
     if train_config.quantization:
         model = prepare_model_for_kbit_training(model)
 
-    # Apply LoRA if enabled in config
+    # Check if LoRA is enabled
     use_lora = getattr(train_config, 'use_lora', False)
+    
     if use_lora:
+        # =================================================================
+        # LoRA MODE: Apply LoRA adapters
+        # PEFT automatically freezes base parameters
+        # =================================================================
         logger.info("=" * 60)
         logger.info("APPLYING LoRA TO LLM")
         logger.info("=" * 60)
         
-        # Get LoRA config from train_config or use defaults
+        # Get LoRA config from train_config
         lora_config = getattr(train_config, 'lora', None)
+        
+        # Use config values or defaults
         if lora_config is None:
-            # Default LoRA config
+            logger.warning("No LoRA config found, using defaults")
             lora_r = 16
             lora_alpha = 32
             lora_dropout = 0.05
-            lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+            lora_target_modules = ["q_proj", "v_proj", "k_proj", "o_proj"]
         else:
             lora_r = getattr(lora_config, 'r', 16)
             lora_alpha = getattr(lora_config, 'alpha', 32)
             lora_dropout = getattr(lora_config, 'dropout', 0.05)
             lora_target_modules = list(getattr(lora_config, 'target_modules', 
-                                          ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]))
+                                        ["q_proj", "v_proj", "k_proj", "o_proj"]))
         
-        # Create LoRA config
+        logger.info(f"LoRA Config: r={lora_r}, alpha={lora_alpha}, dropout={lora_dropout}")
+        logger.info(f"LoRA Target Modules: {lora_target_modules}")
+        
+        # Create and apply LoRA
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=lora_r,
@@ -146,31 +184,41 @@ def setup_llm(train_config, model_config, **kwargs):
             target_modules=lora_target_modules,
             bias="none",
         )
-        
-        # Apply LoRA
         model = get_peft_model(model, peft_config)
         
-        # Log LoRA parameters
+        # Log trainable parameters
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         total_params = sum(p.numel() for p in model.parameters())
-        logger.info(f"LoRA Config: r={lora_r}, alpha={lora_alpha}, dropout={lora_dropout}")
-        logger.info(f"LoRA Target Modules: {lora_target_modules}")
         logger.info(f"LoRA Trainable Parameters: {trainable_params:,} ({100*trainable_params/total_params:.2f}%)")
+        model.print_trainable_parameters()
         logger.info("=" * 60)
         
-        # Print trainable vs frozen
-        model.print_trainable_parameters()
-        
-    elif train_config.freeze_llm: 
+    elif train_config.freeze_llm:
+        # =================================================================
+        # FROZEN MODE: Freeze all LLM parameters
+        # =================================================================
+        logger.info("=" * 60)
+        logger.info("LLM: FROZEN (no LoRA)")
+        logger.info("=" * 60)
         for name, param in model.named_parameters(): 
             param.requires_grad = False
         model.eval()
+        
+    else:
+        # =================================================================
+        # FULL FINE-TUNE MODE: All LLM parameters trainable
+        # WARNING: This is very expensive!
+        # =================================================================
+        logger.info("=" * 60)
+        logger.info("LLM: FULL FINE-TUNING (all parameters trainable)")
+        logger.info("WARNING: This requires significant GPU memory!")
+        logger.info("=" * 60)
 
     return model
 
 
-
 def setup_projector(train_config, model_config, **kwargs):
+    """Setup projector to map encoder outputs to LLM embedding space."""
     projector_type = model_config.projector.lower() if model_config.projector else ""
     
     if projector_type in ["linear", "concatlinear"]:
@@ -185,139 +233,96 @@ def setup_projector(train_config, model_config, **kwargs):
     else:
         raise ValueError(f"Unknown projector type: '{model_config.projector}'. "
                         f"Supported: linear, concatLinear, cov1d-linear, q-former")
+    
     print_module_size(projector, model_config.projector)
     return projector
 
 
 class ASRLLM(nn.Module):
+    """
+    Speech-Language Model for ASR.
     
-    def __init__(self,
-                 encoder: nn.Module,
-                 llm: nn.Module,
-                 projector: Optional[nn.Module],
-                 tokenizer,
-                 train_config,
-                 model_config,
-                 **kwargs
+    Combines:
+        - Whisper encoder for audio feature extraction
+        - Projector for modality alignment
+        - LLM for text generation
+    """
+    
+    def __init__(
+        self,
+        encoder: nn.Module,
+        llm: nn.Module,
+        projector: Optional[nn.Module],
+        tokenizer,
+        train_config,
+        model_config,
+        **kwargs
     ):
         super().__init__()
 
-        # encoder
         self.encoder = encoder
-
-        # llm 
         self.llm = llm
-
-        # projector
         self.projector = projector
-
-        # tokenizer
         self.tokenizer = tokenizer
-
         self.train_config = train_config
         self.model_config = model_config
         self.dataset_config = kwargs.get("data_config", None)
         
-        # Initialize metric flag for accuracy computation
-        self.metric = kwargs.get("metric", True)  # Default to True if not specified
+        # Metric computation flag
+        self.metric = kwargs.get("metric", True)
         
-        # Label smoothing for regularization (reduces overconfidence)
+        # Label smoothing for regularization
         self.label_smoothing = getattr(train_config, 'label_smoothing', 0.0)
         if self.label_smoothing > 0:
             logger.info(f"Label smoothing enabled: {self.label_smoothing}")
-        
-        # =========================================================================
-        # NEW: Frozen projector mode for Experiment-1 (Random Projector + LoRA)
-        # =========================================================================
-        # When freeze_projector=True and use_lora=True, we need special handling
-        # to ensure gradients flow to LoRA parameters even though projector is frozen
-        # =========================================================================
-        self.freeze_projector = getattr(train_config, 'freeze_projector', False)
-        self.use_lora = getattr(train_config, 'use_lora', False)
-        
-        if self.freeze_projector and self.use_lora:
-            logger.info("=" * 60)
-            logger.info("EXPERIMENT-1 MODE DETECTED")
-            logger.info("Frozen Projector + LoRA: Special gradient handling enabled")
-            logger.info("=" * 60)
-
 
     def forward(
-            self,
-            input_ids: torch.LongTensor = None,
-            attention_mask: Optional[torch.Tensor] = None,
-            position_ids: Optional[torch.LongTensor] = None,
-            past_key_values: Optional[List[torch.FloatTensor]] = None,
-            inputs_embeds: Optional[torch.FloatTensor] = None,
-            labels: Optional[torch.LongTensor] = None,
-            use_cache: Optional[bool] = None,
-            output_attentions: Optional[bool] = None,
-            output_hidden_states: Optional[bool] = None,
-            return_dict: Optional[bool] = None,
-            **kwargs
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        **kwargs
     ):
-        
         audio_mel = kwargs.get("audio_mel", None)
         audio_mel_mask = kwargs.get("audio_mel_mask", None)
-        audio_mel_post_mask = kwargs.get("audio_mel_post_mask", None) # optional, downsampled mask for whisper
-        audio = kwargs.get("audio", None)
-        audio_mask = kwargs.get("audio_mask", None)
-
+        audio_mel_post_mask = kwargs.get("audio_mel_post_mask", None)
         modality_mask = kwargs.get("modality_mask", None)
 
-        # Freeze encoder
+        # 1. Encode audio with Whisper
         if getattr(self.train_config, "freeze_encoder", False):
             self.encoder.eval()
-            context = torch.no_grad()
-        else:
-            context = torch.enable_grad()
-
-        # 1. Whisper encode audio -> [B, n_mels, T] -> permute -> [B, T, n_mels] for var-length 
-        with context:
-            encoder_outputs = self.encoder.extract_variable_length_features(audio_mel.permute(0, 2, 1)) # bs*seq*dim
-        
-        # DEBUG: Print shapes to diagnose OOM (always print first batch of each mode)
-        debug_key = f"_debug_{labels is not None}"  # Different key for train vs eval
-        if not hasattr(self, debug_key):
-            mode = "TRAIN" if labels is not None else "EVAL"
-            print(f"\n[DEBUG MODEL {mode}] audio_mel input shape: {audio_mel.shape}")
-            print(f"[DEBUG MODEL {mode}] encoder_outputs shape: {encoder_outputs.shape}")
-            setattr(self, debug_key, True)
-
-        if audio_mel_post_mask is None:
-            audio_mel_post_mask = torch.ones(encoder_outputs.size()[:-1], dtype=torch.long, device=encoder_outputs.device) # [B, T_enc]
-
-        # Note: With autocast enabled in train.py, PyTorch will automatically handle
-        # precision for matmul operations. Projector weights are FP32 for stable
-        # optimizer updates, but autocast may run matmuls in lower precision.
-        # This is the correct mixed precision pattern.
-
-        # 2. Projector (Project to LLM embedding space)
-        # =========================================================================
-        # MODIFIED: Handle frozen projector case for Experiment-1
-        # =========================================================================
-        if self.freeze_projector:
-            # Frozen projector: run without gradients
             with torch.no_grad():
-                encoder_outputs = self._apply_projector(encoder_outputs, audio_mel_post_mask)
+                encoder_outputs = self.encoder.extract_variable_length_features(
+                    audio_mel.permute(0, 2, 1)
+                )
         else:
-            # Normal case: projector is trainable
-            encoder_outputs = self._apply_projector(encoder_outputs, audio_mel_post_mask)
-        
-        # DEBUG: Print projected shape
-        debug_key2 = f"_debug_proj_{labels is not None}"
-        if not hasattr(self, debug_key2):
-            mode = "TRAIN" if labels is not None else "EVAL"
-            print(f"[DEBUG MODEL {mode}] encoder_outputs after projector: {encoder_outputs.shape}")
-            setattr(self, debug_key2, True)
+            encoder_outputs = self.encoder.extract_variable_length_features(
+                audio_mel.permute(0, 2, 1)
+            )
 
+        # Create mask if not provided
+        if audio_mel_post_mask is None:
+            audio_mel_post_mask = torch.ones(
+                encoder_outputs.size()[:-1], 
+                dtype=torch.long, 
+                device=encoder_outputs.device
+            )
 
-        # 3. Token embedding 
+        # 2. Project to LLM embedding space
+        encoder_outputs = self._apply_projector(encoder_outputs, audio_mel_post_mask)
+
+        # 3. Get text embeddings
         if input_ids is not None: 
-            # Santize any placeholder ids for embedding lookup
-            input_ids[input_ids == -1] = 0
-    
-            # Resolve embedding layer across model architectures
+            input_ids[input_ids == -1] = 0  # Sanitize placeholder ids
+            
+            # Get embedding layer (handle different model architectures)
             if hasattr(self.llm, 'model') and hasattr(self.llm.model, "embed_tokens"):
                 inputs_embeds = self.llm.model.embed_tokens(input_ids)
             elif hasattr(self.llm, "model") and hasattr(self.llm.model, "model") and hasattr(self.llm.model.model, "embed_tokens"):
@@ -325,115 +330,41 @@ class ASRLLM(nn.Module):
             else:
                 inputs_embeds = self.llm.model.model.model.embed_tokens(input_ids)
 
-        
+        # 4. Merge audio and text embeddings
         if modality_mask is not None:
             modality_mask_start_indices = (modality_mask == True).float().argmax(dim=1)
-            modality_lengths = torch.clamp(modality_mask.sum(dim=1), max=encoder_outputs.shape[1]).tolist()
-            
-            # DEBUG: Check modality mask alignment
-            debug_key_mod = f"_debug_modality_{labels is not None}"
-            if not hasattr(self, debug_key_mod):
-                mode = "TRAIN" if labels is not None else "EVAL"
-                print(f"[DEBUG MODEL {mode}] modality_mask shape: {modality_mask.shape}")
-                print(f"[DEBUG MODEL {mode}] modality_mask_start_indices: {modality_mask_start_indices.tolist()}")
-                print(f"[DEBUG MODEL {mode}] modality_lengths (clamped to encoder output): {modality_lengths}")
-                print(f"[DEBUG MODEL {mode}] encoder_outputs shape for replacement: {encoder_outputs.shape}")
-                print(f"[DEBUG MODEL {mode}] Original modality_mask True counts: {modality_mask.sum(dim=1).tolist()}")
-                setattr(self, debug_key_mod, True)
+            modality_lengths = torch.clamp(
+                modality_mask.sum(dim=1), 
+                max=encoder_outputs.shape[1]
+            ).tolist()
 
             encoder_outs_pad = torch.zeros_like(inputs_embeds)
             for i in range(encoder_outputs.shape[0]):
                 encoder_outs_pad[
-                    i, modality_mask_start_indices[i]:modality_mask_start_indices[i]+modality_lengths[i]
+                    i, 
+                    modality_mask_start_indices[i]:modality_mask_start_indices[i]+modality_lengths[i]
                 ] = encoder_outputs[i][:modality_lengths[i]]
             
-            # DEBUG: Verify embedding replacement
-            debug_key_emb = f"_debug_embedding_{labels is not None}"
-            if not hasattr(self, debug_key_emb):
-                mode = "TRAIN" if labels is not None else "EVAL"
-                # Check if encoder embeddings are actually being used
-                sample_idx = 0
-                start = int(modality_mask_start_indices[sample_idx])
-                length = int(modality_lengths[sample_idx])
-                text_embed_norm = inputs_embeds[sample_idx, start:start+5].norm().item()
-                enc_embed_norm = encoder_outs_pad[sample_idx, start:start+5].norm().item()
-                final_audio_norm = (encoder_outs_pad + inputs_embeds * (~modality_mask[:, :, None]))[sample_idx, start:start+5].norm().item()
-                final_text_norm = (encoder_outs_pad + inputs_embeds * (~modality_mask[:, :, None]))[sample_idx, start+length:start+length+5].norm().item()
-                print(f"[DEBUG MODEL {mode}] Sample 0 - Audio region norms:")
-                print(f"  Text embedding at audio pos (should be zeroed): {text_embed_norm:.4f}")
-                print(f"  Encoder embedding at audio pos: {enc_embed_norm:.4f}")
-                print(f"  Final embedding at audio pos (should be encoder): {final_audio_norm:.4f}")
-                print(f"  Final embedding at text pos (prompt): {final_text_norm:.4f}")
-                # Check if modality_mask is correct
-                print(f"  modality_mask at audio positions: {modality_mask[sample_idx, start:start+5].tolist()}")
-                print(f"  modality_mask at text positions: {modality_mask[sample_idx, start+length:start+length+5].tolist()}")
-                setattr(self, debug_key_emb, True)
-            
             inputs_embeds = encoder_outs_pad + inputs_embeds * (~modality_mask[:, :, None])
-        
-        # DEBUG: Print final inputs_embeds shape going into LLM
-        debug_key3 = f"_debug_embed_{labels is not None}"
-        if not hasattr(self, debug_key3):
-            mode = "TRAIN" if labels is not None else "EVAL"
-            print(f"[DEBUG MODEL {mode}] input_ids shape: {input_ids.shape if input_ids is not None else 'None'}")
-            print(f"[DEBUG MODEL {mode}] inputs_embeds shape to LLM: {inputs_embeds.shape}")
-            expected_mem = inputs_embeds.shape[0] * inputs_embeds.shape[1] * 151936 * 2 / 1e9
-            print(f"[DEBUG MODEL {mode}] Expected logits memory: {expected_mem:.2f} GB (bfloat16)")
-            setattr(self, debug_key3, True)
 
-        # Fast path for generation setup
+        # Fast path for generation
         if kwargs.get("inference_mode", False): 
             return inputs_embeds, attention_mask
-        
-        # =========================================================================
-        # CRITICAL FIX FOR EXPERIMENT-1: Frozen Projector + LoRA Training
-        # =========================================================================
-        # When projector is frozen, inputs_embeds doesn't have requires_grad=True
-        # because no trainable parameters contributed to its computation.
-        # This breaks gradient flow to LoRA parameters in the LLM.
-        #
-        # Solution: Enable gradients on inputs_embeds so LoRA can receive gradients.
-        # This is safe because:
-        # 1. We're not updating encoder/projector (they're frozen)
-        # 2. Gradients will only flow to LoRA parameters in the LLM
-        # 3. This doesn't change the forward pass values, only enables backprop
-        # =========================================================================
-        if self.training and self.freeze_projector and self.use_lora:
-            if not inputs_embeds.requires_grad:
-                # Check if LLM has trainable parameters (LoRA)
-                llm_has_trainable = any(p.requires_grad for p in self.llm.parameters())
-                if llm_has_trainable:
-                    # Enable gradients on embeddings to allow backprop to LoRA
-                    inputs_embeds = inputs_embeds.detach()
-                    inputs_embeds.requires_grad_(True)
-                    
-                    # Debug: Only print once
-                    debug_key_grad = "_debug_grad_fix_applied"
-                    if not hasattr(self, debug_key_grad):
-                        print("[DEBUG MODEL] Exp-1 gradient fix: enabled requires_grad on inputs_embeds for LoRA training")
-                        setattr(self, debug_key_grad, True)
-        # =========================================================================
-        
-        # Default path for training / evaluation
-        # Explicitly disable KV cache to prevent memory accumulation during training
-        
-        # If label smoothing is enabled, compute loss ourselves
+
+        # 5. Forward through LLM
         if self.label_smoothing > 0 and labels is not None:
-            # Get logits without loss computation
+            # Compute loss with label smoothing
             model_outputs = self.llm(
                 inputs_embeds=inputs_embeds, 
                 attention_mask=attention_mask, 
-                labels=None,  # Don't compute loss in LLM
+                labels=None,
                 use_cache=False
             )
             
-            # Compute loss with label smoothing
             logits = model_outputs.logits
-            # Shift for causal LM: predict next token
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             
-            # Flatten for cross entropy
             loss_fct = CrossEntropyLoss(
                 ignore_index=-100, 
                 label_smoothing=self.label_smoothing
@@ -442,87 +373,68 @@ class ASRLLM(nn.Module):
                 shift_logits.view(-1, shift_logits.size(-1)), 
                 shift_labels.view(-1)
             )
-            
-            # Replace the loss in model_outputs
             model_outputs.loss = loss
         else:
             model_outputs = self.llm(
                 inputs_embeds=inputs_embeds, 
                 attention_mask=attention_mask, 
-                labels=labels,  # Can be None during eval to skip loss computation
-                use_cache=False  # Critical: prevents KV cache memory accumulation
+                labels=labels,
+                use_cache=False
             )
 
-        # Metrics (computed on CPU to prevent GPU memory accumulation)
-        # Skip metrics when labels=None (eval mode skips loss computation to save memory)
+        # 6. Compute metrics
         metrics = {}
         if self.metric and labels is not None:
             with torch.no_grad():
-                # Move logits to CPU ONCE and delete GPU copy immediately
                 logits_cpu = model_outputs.logits.detach().cpu()
                 labels_cpu = labels.detach().cpu()
                 
-                # Compute token accuracy
+                # Token accuracy
                 preds = torch.argmax(logits_cpu, dim=-1)
                 acc = compute_accuracy(preds[:, :-1], labels_cpu[:, 1:], ignore_label=-100)
                 metrics["acc"] = float(acc.item())
 
-                # Compute WER (batch-level average) - use CPU tensors
+                # WER
                 hyp_texts, ref_texts = decode_texts_from_outputs(
                     logits=logits_cpu,
                     labels=labels_cpu,
                     tokenizer=self.tokenizer,
                     ignore_label=-100
                 )
-                
-                # Then compute WER using the decoded texts
-                wer_score = compute_wer(
-                    hyp_texts=hyp_texts,
-                    ref_texts=ref_texts
-                )
+                wer_score = compute_wer(hyp_texts=hyp_texts, ref_texts=ref_texts)
                 metrics["wer"] = float(wer_score)
                 
-                # Explicitly delete CPU tensors to free memory
                 del preds, labels_cpu, logits_cpu
 
         return model_outputs, metrics
     
-    
     def _apply_projector(self, encoder_outputs, audio_mel_post_mask):
-        """
-        Apply the projector to encoder outputs.
-        Separated into a helper method for cleaner frozen/unfrozen handling.
-        """
+        """Apply projector to encoder outputs."""
         projector_type = self.model_config.projector.lower() if self.model_config.projector else ""
         
         if projector_type in ["q-former", "qformer"]:
-            # Q-former
             encoder_outputs = self.projector(encoder_outputs, audio_mel_post_mask)
-        elif projector_type in ["linear", "concatlinear", "cov1d-linear", "conv1d-linear", "cov1d", "conv1d"]:
-            # linear or conv1d + linear
-            encoder_outputs = self.projector(encoder_outputs)
         else:
-            # Fallback - just run projector if it exists
-            if self.projector is not None:
-                encoder_outputs = self.projector(encoder_outputs)
+            encoder_outputs = self.projector(encoder_outputs)
         
         return encoder_outputs
     
-    
     @torch.no_grad()
-    def generate(self,
-                input_ids: torch.LongTensor = None,
-                attention_mask: Optional[torch.Tensor] = None,
-                position_ids: Optional[torch.LongTensor] = None,
-                past_key_values: Optional[List[torch.FloatTensor]] = None,
-                inputs_embeds: Optional[torch.FloatTensor] = None,
-                labels: Optional[torch.LongTensor] = None,
-                use_cache: Optional[bool] = None,
-                output_attentions: Optional[bool] = None,
-                output_hidden_states: Optional[bool] = None,
-                return_dict: Optional[bool] = None,
-                **kwargs,
-                ):
+    def generate(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        **kwargs,
+    ):
+        """Generate text from audio input."""
         kwargs["inference_mode"] = True
 
         if inputs_embeds is None:
@@ -542,7 +454,6 @@ class ASRLLM(nn.Module):
 
         model_outputs = self.llm.generate(
             inputs_embeds=inputs_embeds,
-            # max_length=kwargs.get("max_length", 200),
             max_new_tokens=kwargs.get("max_new_tokens", 200),
             num_beams=kwargs.get("num_beams", 4),
             do_sample=kwargs.get("do_sample", False),
@@ -558,89 +469,3 @@ class ASRLLM(nn.Module):
         )
 
         return model_outputs
-    
-    @torch.no_grad()
-    def inference(
-        self,
-        audio_path=None,
-        prompt=None,
-        generation_config=None,
-        logits_processor=None,
-        stopping_criteria=None,
-        prefix_allowed_tokens_fn=None,
-        synced_gpus=None,
-        assistant_model=None,
-        streamer=None,
-        negative_prompt_ids=None,
-        negative_prompt_attention_mask=None,
-        **kwargs,
-    ):
-        # inference for asr model
-
-        device = kwargs.get("device", "cuda")
-        if os.path.exists(audio_path):  # Audio-Text QA
-            import whisper
-
-            audio_raw = whisper.load_audio(audio_path)
-            audio_raw = whisper.pad_or_trim(audio_raw)
-
-            mel_size = getattr(
-                self.dataset_config, "mel_size", 80
-            )  # 80 for large v1 and v2, 128 for large v3
-            audio_mel = (
-                whisper.log_mel_spectrogram(audio_raw, n_mels=mel_size)
-                .permute(1, 0)[None, :, :]
-                .to(device)
-            )
-
-            encoder_outs = self.encoder.extract_variable_length_features(
-                audio_mel.permute(0, 2, 1)
-            )
-
-            
-            projector_dtype = next(self.projector.parameters()).dtype
-            encoder_outs = encoder_outs.to(projector_dtype)
-
-            if self.model_config.projector == "q-former":
-                audio_mel_post_mask = torch.ones(
-                    encoder_outs.size()[:-1], dtype=torch.long
-                ).to(encoder_outs.device)
-                encoder_outs = self.projector(encoder_outs, audio_mel_post_mask)
-            if self.model_config.projector == "linear":
-                encoder_outs = self.projector(encoder_outs)
-        else:  # Text QA
-            encoder_outs = torch.empty(
-                1, 0, self.llm.model.embed_tokens.embedding_dim
-            ).to(device)
-
-        prompt = "USER: {}\n ASSISTANT:".format(prompt)
-        prompt_ids = self.tokenizer.encode(prompt)
-        prompt_length = len(prompt_ids)
-        prompt_ids = torch.tensor(prompt_ids, dtype=torch.int64).to(device)
-
-        if hasattr(self.llm.model, "embed_tokens"):
-            inputs_embeds = self.llm.model.embed_tokens(prompt_ids)
-        elif hasattr(self.llm.model.model, "embed_tokens"):
-            inputs_embeds = self.llm.model.model.embed_tokens(prompt_ids)
-        else:
-            inputs_embeds = self.llm.model.model.model.embed_tokens(prompt_ids)
-
-        inputs_embeds = torch.cat(
-            (encoder_outs, inputs_embeds[None, :, :]), dim=1
-        )  # [audio,prompt]
-
-        attention_mask = torch.ones(inputs_embeds.size()[:-1], dtype=torch.long).to(
-            inputs_embeds.device
-        )
-
-        # generate
-        model_outputs = self.generate(
-            inputs_embeds=inputs_embeds, attention_mask=attention_mask, **kwargs
-        )
-
-        # Decode output ids to text
-        output_text = self.tokenizer.decode(
-            model_outputs[0], skip_special_tokens=True
-        )
-
-        return output_text
