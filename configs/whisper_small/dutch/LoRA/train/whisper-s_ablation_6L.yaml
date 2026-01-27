@@ -1,18 +1,19 @@
 # =============================================================================
-# Dutch Common Voice Training Configuration (Projector-Only)
+# Config: Projector + LoRA Training (6 Encoder Layers)
 # =============================================================================
-# Training config for Dutch Common Voice (~50 hours, ~40,000 samples)
-# Whisper-small (all 6 encoder layers) + Qwen2.5-3B + concatLinear projector with LoRA
-# Only projector is trained (freeze_llm=true, freeze_encoder=true)
+# 
+# Training Mode: Projector and LoRA adapters are trained
+# - Encoder: Frozen
+# - Projector: Trainable
+# - LLM: Base weights frozen, LoRA adapters trainable
 #
 # Calculation:
 #   - samples: 40,000
-#   - batch_size: 8
-#   - steps_per_epoch: 40,000 / 8 = 5,000
+#   - batch_size: 4
+#   - steps_per_epoch: 40,000 / 4 = 10,000
 #   - num_epochs: 5
-#   - total_steps: 5,000 × 5 = 25,000
-#   - warmup_steps: 5% of total = 1,250
-#   - validation_interval: 5% of steps_per_epoch = 5% of 25000 = 1250
+#   - total_steps: 10,000 × 5 = 50,000
+#   - warmup_steps: 5% of total = 2,500
 # =============================================================================
 
 model:
@@ -32,7 +33,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: 6        # null = all 12 layers
+  encoder_num_layers: 6        # null = all layers
   
   # Projector Configuration
   projector: concatLinear
@@ -60,29 +61,42 @@ train:
   
   # Training Schedule
   num_epochs: 5
-  total_steps: 25000
-  warmup_steps: 1250
-  validation_interval: 1250
+  total_steps: 50000
+  warmup_steps: 2500
   
   # Optimizer Configuration
   lr: 1.0e-4
   weight_decay: 0.01
   grad_clip: 1.0
-  gamma: 0.85
+  lora_lr_multiplier: 1.0         # LoRA LR = lr * multiplier
   
   # Precision Configuration
   use_fp16: false
   mixed_precision: true
   quantization: false
   
-  # Freezing Configuration (Projector-Only Training)
-  freeze_llm: true
-  freeze_encoder: true
-  freeze_layers: false
-  num_freeze_layers: 0
+  # ==========================================================================
+  # FREEZING CONFIGURATION - Projector + LoRA
+  # ==========================================================================
+  freeze_encoder: true      # Whisper encoder is frozen
+  freeze_llm: true          # Ignored when use_lora=true (PEFT handles it)
+  use_lora: true            # Enable LoRA on LLM
+  
+  # LoRA Configuration
+  # IMPORTANT: This must be inside the 'train:' section!
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.1
+    target_modules:
+      - q_proj
+      - v_proj
+      - k_proj
+      - o_proj
+  # ==========================================================================
   
   # Output Configuration
-  output_dir: outputs/dutch/whisper-s_ablation_6L_lora/
+  output_dir: outputs/whisper_small/dutch/LoRA/whisper-s_ablation_6L_lora_final/
   save_model: true
   seed: 42
   
@@ -93,30 +107,17 @@ train:
   batching_strategy: packing
   context_length: 384
 
-  # LoRA Configuration
-  use_lora: true
-  lora:
-    r: 16
-    alpha: 32
-    dropout: 0.1
-    target_modules:
-      - q_proj
-      - v_proj
-      - k_proj
-      - o_proj
-
-
 scheduler:
   name: cosine_with_warmup
-  total_training_steps: 25000
-  warmup_steps: 1250
+  total_training_steps: 50000
+  warmup_steps: 2500
   min_lr_ratio: 0.1
 
 early_stopping:
   monitor: val/wer
   mode: min
   patience: 5
-  min_delta: 0.001
+  min_delta: 0.005
 
 data:
   dataset: speech_dataset
@@ -140,8 +141,8 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_Dutch_ABLATIONS_LoRA
-  wandb_exp_name: whisper-s_dutch_ablation_6L_lora
+  wandb_project_name: SLAM_ASR_Dutch
+  wandb_exp_name: whisper-s_ablation_6L_lora_final
   log_dir: ./logs
-  log_filename: whisper-s_dutch_ablation_6L_lora.log
+  log_filename: whisper-s_ablation_6L_lora_final.log
   log_interval: 100
