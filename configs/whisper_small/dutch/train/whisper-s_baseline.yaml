@@ -7,11 +7,11 @@
 #
 # Calculation:
 #   - samples: 40,000
-#   - batch_size: 4
-#   - steps_per_epoch: 40,000 / 4 = 10,000
+#   - batch_size: 8
+#   - steps_per_epoch: 40,000 / 8 = 5,000
 #   - num_epochs: 3
-#   - total_steps: 10,000 × 3 = 30,000
-#   - warmup_steps: 5% of total = 1,500
+#   - total_steps: 5,000 × 3 = 15,000
+#   - warmup_steps: 5% of total = 750
 # =============================================================================
 
 model:
@@ -31,7 +31,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: null        # null = all 12 layers
+  encoder_num_layers: null       # null = all layers
   
   # Projector Configuration
   projector: concatLinear
@@ -74,14 +74,16 @@ train:
   mixed_precision: true
   quantization: false
   
-  # Freezing Configuration (Projector-Only Training)
-  freeze_llm: true
-  freeze_encoder: true
-  freeze_layers: false
-  num_freeze_layers: 0
+  # ==========================================================================
+  # FREEZING CONFIGURATION - Projector Only
+  # ==========================================================================
+  freeze_encoder: true      # Whisper encoder is frozen
+  freeze_llm: true          # LLM is frozen (no LoRA)
+  use_lora: false           # LoRA disabled
+  # ==========================================================================
   
   # Output Configuration
-  output_dir: outputs/dutch/whisper-s_baseline_8b/
+  output_dir: outputs/whisper_small_f/dutch/whisper-s_baseline/
   save_model: true
   seed: 42
   
@@ -92,19 +94,6 @@ train:
   batching_strategy: packing
   context_length: 384
 
-  # LoRA Configuration
-  use_lora: true
-  lora:
-    r: 16
-    alpha: 32
-    dropout: 0.1
-    target_modules:
-      - q_proj
-      - v_proj
-      - k_proj
-      - o_proj
-
-
 scheduler:
   name: cosine_with_warmup
   total_training_steps: 15000
@@ -114,8 +103,8 @@ scheduler:
 early_stopping:
   monitor: val/wer
   mode: min
-  patience: 5
-  min_delta: 0.001
+  patience: 3
+  min_delta: 0.005
 
 data:
   dataset: speech_dataset
@@ -139,8 +128,8 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_Dutch_ABLATIONS
-  wandb_exp_name: whisper-s_dutch_baseline_8b
+  wandb_project_name: SLAM_ASR_Dutch
+  wandb_exp_name: whisper-s_baseline
   log_dir: ./logs
-  log_filename: whisper-s_dutch_baseline_8b.log
+  log_filename: whisper-s_baseline.log
   log_interval: 100

@@ -1,5 +1,5 @@
 # =============================================================================
-# Dutch Common Voice Training Configuration (Projector-Only) - 6L Encoder
+# Dutch Common Voice Training Configuration (Projector-Only) - 4L Encoder
 # =============================================================================
 # Training config for Dutch Common Voice (~50 hours, ~40,000 samples)
 # Whisper-small (all 12 encoder layers) + Qwen2.5-3B + concatLinear projector
@@ -31,7 +31,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: 6        # null = all layers
+  encoder_num_layers: 4        # null = all layers
   
   # Projector Configuration
   projector: concatLinear
@@ -83,7 +83,7 @@ train:
   # ==========================================================================
   
   # Output Configuration
-  output_dir: outputs/whisper_small_f/dutch/whisper-s_ablation_6L/
+  output_dir: outputs/whisper_small_f/dutch/whisper-s_ablation_4L/
   save_model: true
   seed: 42
   
@@ -129,7 +129,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_Dutch
-  wandb_exp_name: whisper-s_ablation_6L
+  wandb_exp_name: whisper-s_ablation_4L
   log_dir: ./logs
-  log_filename: whisper-s_ablation_6L.log
+  log_filename: whisper-s_ablation_4L.log
   log_interval: 100
