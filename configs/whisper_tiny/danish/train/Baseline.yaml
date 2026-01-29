@@ -1,0 +1,134 @@
+# =============================================================================
+# Experiment 1: Baseline - Whisper-tiny 4 Layers (All)
+# =============================================================================
+# Training config for Danish Common Voice
+# Whisper-tiny (all encoder layers) + Qwen2.5-3B + concatLinear projector
+# # calculations 
+#   - samples: 3592
+#   - batch_size: 4
+#   - steps_per_epoch: 3592 / 4 = 898
+#   - num_epochs: 6                  
+#   - total_steps: 898 × 6 = 5388
+#   - warmup_steps: ~5% of total = 269
+#   - validation_interval: ~5% of total_steps = 5% of 5388 = 269
+# =============================================================================
+
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+  
+  # LLM Configuration
+  llm_model_name: qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
+  llm_dim: 2048
+  llm_model_path: null
+  llm_type: decoder_only
+  
+  # Encoder Configuration
+  encoder_model_name: whisper-tiny
+  encoder_model: tiny
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_dim: 384
+  encoder_num_layers: null      # null = all layers
+  
+  # Projector Configuration
+  projector: concatLinear
+  projector_ds_rate: 5
+  projector_hidden_dim: 2048
+  projector_dropout: 0.1
+  modal: audio
+  normalize: false
+  encoder_type: finetune
+
+train:
+  model_name: ASRLLM
+  run_validation: true
+  
+  # Batch Configuration
+  batch_size: 4
+  val_batch_size: 8
+  gradient_accumulation_steps: 1
+  num_workers: 4
+  max_eval_batches: 200
+  
+  # Generation Configuration
+  max_new_tokens: 128
+  repetition_penalty: 1.5
+  
+  # Training Schedule
+  num_epochs: 6
+  total_steps: 5388
+  warmup_steps: 269
+  validation_interval: 269
+  
+  # Optimizer Configuration
+  lr: 1.0e-4
+  weight_decay: 0.01
+  grad_clip: 1.0
+  gamma: 0.85
+  
+  # Precision Configuration
+  use_fp16: false
+  mixed_precision: true
+  quantization: false
+  
+  # ==========================================================================
+  # FREEZING CONFIGURATION - Projector Only
+  # ==========================================================================
+  freeze_encoder: true      # Whisper encoder is frozen
+  freeze_llm: true          # LLM is frozen (no LoRA)
+  use_lora: false           # LoRA disabled
+  # ==========================================================================
+  
+  # Output Configuration
+  output_dir: outputs/whisper_tiny/danish/baseline/
+  save_model: true
+  seed: 42
+  
+  # Other Configuration
+  one_gpu: true
+  use_peft: false
+  use_fast_kernels: false
+  batching_strategy: packing
+  context_length: 384
+
+scheduler:
+  name: cosine_with_warmup
+  total_training_steps: 5388
+  warmup_steps: 269
+  min_lr_ratio: 0.1
+
+early_stopping:
+  monitor: val/wer
+  mode: min
+  patience: 3
+  min_delta: 0.005
+
+data:
+  dataset: speech_dataset
+  file: datamodule/dataset.py:get_speech_dataset
+  hf_dataset_path: data/cv22_hf/da
+  train_split: train
+  val_split: validation
+  test_split: test
+  use_raw_transcription: false
+  input_type: mel
+  mel_size: 80
+  normalize: false
+  projector_ds_rate: 5
+  use_variable_length: true
+  max_audio_length: 30
+  fix_length_audio: -1
+  max_target_chars: 500
+  inference_mode: false
+
+log:
+  use_wandb: true
+  wandb_dir: ./wandb
+  wandb_entity_name: null
+  wandb_project_name: SLAM_ASR_whisper-tiny_Danish
+  wandb_exp_name: whisper-tiny_baseline
+  log_dir: ./logs
+  log_filename: whisper-tiny_baseline.log
+  log_interval: 100
