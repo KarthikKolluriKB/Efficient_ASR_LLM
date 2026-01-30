@@ -1,16 +1,16 @@
 # =============================================================================
-# Experiment 1: Baseline - Whisper-base 4 Layers
+# Experiment 1: Baseline - Whisper-tiny 4 Layers (All) + LoRA
 # =============================================================================
 # Training config for Danish Common Voice
-# Whisper-base (all  encoder layers) + Qwen2.5-3B + concatLinear projector
+# Whisper-tiny (all encoder layers) + Qwen2.5-3B + concatLinear projector
 # # calculations 
 #   - samples: 3592
 #   - batch_size: 4
 #   - steps_per_epoch: 3592 / 4 = 898
-#   - num_epochs: 6                  
-#   - total_steps: 898 × 6 = 5388
-#   - warmup_steps: ~5% of total = 269
-#   - validation_interval: ~5% of total_steps = 5% of 5388 = 269
+#   - num_epochs: 10                 
+#   - total_steps: 898 × 10 = 8980
+#   - warmup_steps: ~5% of total = 449
+#   - validation_interval: ~5% of total_steps = 5% of 8980 = 449
 # =============================================================================
 
 model:
@@ -25,12 +25,12 @@ model:
   llm_type: decoder_only
   
   # Encoder Configuration
-  encoder_model_name: whisper-base
-  encoder_model: base
+  encoder_model_name: whisper-tiny
+  encoder_model: tiny
   encoder_ds_rate: 2
   encoder_model_path: null
-  encoder_dim: 512
-  encoder_num_layers: 4      # null = all layers
+  encoder_dim: 384
+  encoder_num_layers: null      # null = all layers
   
   # Projector Configuration
   projector: concatLinear
@@ -57,10 +57,10 @@ train:
   repetition_penalty: 1.5
   
   # Training Schedule
-  num_epochs: 6
-  total_steps: 5388
-  warmup_steps: 269
-  validation_interval: 269
+  num_epochs: 10
+  total_steps: 8980
+  warmup_steps: 449
+  validation_interval: 449
   
   # Optimizer Configuration
   lr: 1.0e-4
@@ -72,37 +72,47 @@ train:
   use_fp16: false
   mixed_precision: true
   quantization: false
-  
+
   # ==========================================================================
   # FREEZING CONFIGURATION - Projector Only
   # ==========================================================================
   freeze_encoder: true      # Whisper encoder is frozen
   freeze_llm: true          # LLM is frozen (no LoRA)
-  use_lora: false           # LoRA disabled
+  use_lora: true           # LoRA enabled
+
+  lora:
+    r: 8                    # LoRA rank (higher = more params, more capacity)
+    alpha: 16               # LoRA alpha (scaling factor, typically 2*r)
+    dropout: 0.1            # LoRA dropout for regularization
+    target_modules:         # Which layers to apply LoRA to
+      - q_proj
+      - v_proj
+      - k_proj
+      - o_proj
   # ==========================================================================
-  
+
   # Output Configuration
-  output_dir: outputs/whisper_base/danish/ablation_4L/
+  output_dir: outputs/whisper_tiny/danish/baseline_lora/
   save_model: true
   seed: 42
   
   # Other Configuration
   one_gpu: true
-  use_peft: false
+  use_peft: true
   use_fast_kernels: false
   batching_strategy: packing
   context_length: 384
 
 scheduler:
   name: cosine_with_warmup
-  total_training_steps: 5388
-  warmup_steps: 269
+  total_training_steps: 8980
+  warmup_steps: 449
   min_lr_ratio: 0.1
 
 early_stopping:
   monitor: val/wer
   mode: min
-  patience: 3
+  patience: 6
   min_delta: 0.005
 
 data:
@@ -127,8 +137,8 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_whisper-base_Danish
-  wandb_exp_name: whisper-base_ablation_4L
+  wandb_project_name: SLAM_ASR_whisper-tiny_Danish
+  wandb_exp_name: whisper-tiny_baseline_lora
   log_dir: ./logs
-  log_filename: whisper-base_ablation_4L.log
+  log_filename: whisper-tiny_baseline_lora.log
   log_interval: 100
