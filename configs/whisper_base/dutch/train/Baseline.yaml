@@ -45,7 +45,7 @@ train:
   run_validation: true
   
   # Batch Configuration
-  batch_size: 4
+  batch_size: 8
   val_batch_size: 8
   gradient_accumulation_steps: 1
   num_workers: 4
@@ -81,7 +81,7 @@ train:
   # ==========================================================================
   
   # Output Configuration
-  output_dir: outputs/whisper_base/dutch/baseline/
+  output_dir: outputs/whisper_base/dutch/baseline_final/
   save_model: true
   seed: 42
   
@@ -127,7 +127,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper-base_Dutch
-  wandb_exp_name: whisper-base_baseline
+  wandb_exp_name: whisper-base_baseline_final
   log_dir: ./logs
-  log_filename: whisper-base_baseline.log
+  log_filename: whisper-base_baseline_final.log
   log_interval: 100

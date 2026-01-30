@@ -1,15 +1,15 @@
 # =============================================================================
-# Experiment 1: Ablation - Whisper-base 4 Layers
+# Ablation - Whisper-base 4 Layers (All) + LoRA
 # =============================================================================
 # Training config for Dutch Common Voice
-# Whisper-base (4 encoder layers) + Qwen2.5-3B + concatLinear projector
+# Whisper-base (all  encoder layers) + Qwen2.5-3B + concatLinear projector
 # Calculation:
 #   - samples: 40,000
 #   - batch_size: 8
 #   - steps_per_epoch: 40,000 / 8 = 5,000
-#   - num_epochs: 4
-#   - total_steps: 5,000 × 4 = 20,000
-#   - warmup_steps: 5% of total = 1000
+#   - num_epochs: 8
+#   - total_steps: 5,000 × 8 = 40,000
+#   - warmup_steps: 5% of total = 2000
 # =============================================================================
 
 model:
@@ -56,10 +56,10 @@ train:
   repetition_penalty: 1.5
   
   # Training Schedule
-  num_epochs: 4
-  total_steps: 20000
-  warmup_steps: 1000
-  validation_interval: 1000
+  num_epochs: 8
+  total_steps: 40000
+  warmup_steps: 2000
+  validation_interval: 2000
   
   # Optimizer Configuration
   lr: 1.0e-4
@@ -77,31 +77,41 @@ train:
   # ==========================================================================
   freeze_encoder: true      # Whisper encoder is frozen
   freeze_llm: true          # LLM is frozen (no LoRA)
-  use_lora: false           # LoRA disabled
+  use_lora: true           # LoRA enabled
+
+  lora:
+    r: 16                    # LoRA rank (higher = more params, more capacity)
+    alpha: 32               # LoRA alpha (scaling factor, typically 2*r)
+    dropout: 0.1            # LoRA dropout for regularization
+    target_modules:         # Which layers to apply LoRA to
+      - q_proj
+      - v_proj
+      - k_proj
+      - o_proj
   # ==========================================================================
   
   # Output Configuration
-  output_dir: outputs/whisper_base/dutch/ablation_4L_final/
+  output_dir: outputs/whisper_base/dutch/ablation_4L_lora/
   save_model: true
   seed: 42
   
   # Other Configuration
   one_gpu: true
-  use_peft: false
+  use_peft: true
   use_fast_kernels: false
   batching_strategy: packing
   context_length: 384
 
 scheduler:
   name: cosine_with_warmup
-  total_training_steps: 20000
-  warmup_steps: 1000
+  total_training_steps: 40000
+  warmup_steps: 2000
   min_lr_ratio: 0.1
 
 early_stopping:
   monitor: val/wer
   mode: min
-  patience: 3
+  patience: 4
   min_delta: 0.005
 
 data:
@@ -127,7 +137,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper-base_Dutch
-  wandb_exp_name: whisper-base_ablation_4L_final
+  wandb_exp_name: whisper-base_ablation_4L_lora
   log_dir: ./logs
-  log_filename: whisper-base_ablation_4L_final.log
+  log_filename: whisper-base_ablation_4L_lora.log
   log_interval: 100
