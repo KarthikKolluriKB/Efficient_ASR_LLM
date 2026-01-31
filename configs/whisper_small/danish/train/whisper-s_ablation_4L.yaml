@@ -82,7 +82,7 @@ train:
   # ==========================================================================
   
   # Output Configuration
-  output_dir: outputs/whisper_small_f/danish/whisper-s_ablation_4L/
+  output_dir: outputs/whisper_small/danish/whisper-s_ablation_4L/
   save_model: true
   seed: 42
   
