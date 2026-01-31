@@ -1,0 +1,111 @@
+# =============================================================================
+# Evaluation Config - Whisper-base (all Layers)
+# =============================================================================
+# Usage:
+#   python eval.py --config configs/eval_baseline.yaml
+#   python eval.py --config configs/eval_baseline.yaml --num_beams 2
+#   python eval.py --config configs/eval_baseline.yaml --ckpt_path path/to/checkpoint.pt
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Model Configuration (must match training config!)
+# -----------------------------------------------------------------------------
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+  
+  # LLM Configuration
+  llm_model_name: qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
+  llm_dim: 2048
+  llm_model_path: null
+  llm_type: decoder_only
+  
+  # Encoder Configuration
+  encoder_model_name: whisper-base
+  encoder_model: base
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_dim: 512
+  encoder_num_layers: null      # null = all layers
+  
+  # Projector Configuration
+  projector: concatLinear
+  projector_ds_rate: 5
+  projector_hidden_dim: 2048
+  projector_dropout: 0.1
+  modal: audio
+  normalize: false
+  encoder_type: finetune
+
+# -----------------------------------------------------------------------------
+# Evaluation Configuration
+# -----------------------------------------------------------------------------
+eval:
+  # Checkpoint path (can be overridden via CLI --ckpt_path)
+  projector_path: outputs/whisper_base/danish/baseline/checkpoint_best_wer.pt
+  
+  # Batch size (smaller than training due to beam search memory)
+  batch_size: 32
+  num_workers: 4
+  
+  # Generation settings
+  max_new_tokens: 128            # Max tokens to generate
+  num_beams: 2                   # Beam search size (1=greedy, 4=beam search)
+  repetition_penalty: 1.0        # Penalty for repeated tokens (1.0=no penalty)
+  length_penalty: 1.0            # Length penalty (1.0=neutral, >1=longer, <1=shorter)
+  temperature: 1.0               # Sampling temperature (only used if do_sample=True)
+  do_sample: false               # Use sampling (False=deterministic beam search)
+  
+  # Output settings
+  output_dir: outputs/whisper_base/danish/baseline/eval/
+  save_predictions: true
+
+# -----------------------------------------------------------------------------
+# Train Configuration (needed for model building)
+# -----------------------------------------------------------------------------
+train:
+  model_name: ASRLLM
+  batch_size: 8
+  val_batch_size: 8
+  num_workers: 4
+  output_dir: outputs/whisper_base/danish/baseline/
+  freeze_llm: true
+  freeze_encoder: true
+  mixed_precision: true
+  quantization: false
+  one_gpu: true
+  use_peft: false
+
+# -----------------------------------------------------------------------------
+# Data Configuration
+# -----------------------------------------------------------------------------
+data:
+  dataset: speech_dataset
+  file: datamodule/dataset.py:get_speech_dataset
+  hf_dataset_path: data/cv22_hf/da
+  train_split: train
+  val_split: validation
+  test_split: test
+  use_raw_transcription: false
+  input_type: mel
+  mel_size: 80
+  normalize: false
+  projector_ds_rate: 5
+  use_variable_length: true
+  max_audio_length: 30
+  fix_length_audio: -1
+  max_target_chars: 500
+  inference_mode: true    
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+log:
+  use_wandb: true
+  wandb_dir: ./wandb
+  wandb_entity_name: null
+  wandb_project_name: SLAM_ASR_whisper-base_Danish
+  wandb_exp_name: baseline
+  log_dir: ./logs
+  log_filename: baseline.log
