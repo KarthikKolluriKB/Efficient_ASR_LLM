@@ -1,5 +1,5 @@
 # =============================================================================
-# Evaluation Config - Whisper-small Ablation (6 Layers) + LoRA
+# Evaluation Config - Whisper-small Baseline (6 Layers) + LoRA
 # =============================================================================
 # Usage:
 #   python eval.py --config configs/eval_baseline_lora.yaml
@@ -27,7 +27,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: 6       
+  encoder_num_layers: 6      
   
   # Projector settings
   projector: concatLinear
@@ -44,10 +44,10 @@ model:
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
   # NOTE: LoRA checkpoints are named checkpoint_best_wer.pt (not projector_best_wer.pt)
-  projector_path: outputs/danish/whisper-s_ablation_6L_lora/checkpoint_best_wer.pt
+  projector_path: outputs/whisper_small/danish/LoRA/whisper-s_ablation_6L_LoRA/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
-  batch_size: 4
+  batch_size: 32
   num_workers: 4
   
   # Generation settings
@@ -59,7 +59,7 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/danish/whisper-s_ablation_6L_lora/eval/
+  output_dir: outputs/whisper_small/danish/LoRA/whisper-s_ablation_6L_LoRA/eval/
   save_predictions: true
 
 # -----------------------------------------------------------------------------
@@ -70,8 +70,8 @@ train:
   batch_size: 8
   val_batch_size: 8
   num_workers: 4
-  output_dir: outputs/danish/whisper-s_ablation_6L_lora/
-  freeze_llm: false              # Must be false for LoRA
+  output_dir: outputs/whisper_small/danish/LoRA/whisper-s_ablation_6L_LoRA/
+  freeze_llm: true              
   freeze_encoder: true
   mixed_precision: true
   quantization: false
@@ -81,8 +81,8 @@ train:
   # LoRA Configuration (must match training config!)
   use_lora: true
   lora:
-    r: 16
-    alpha: 32
+    r: 8
+    alpha: 16
     dropout: 0.1
     target_modules:
       - q_proj
@@ -119,6 +119,6 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_Danish_ABLATIONS_LoRA
-  wandb_exp_name: eval_whisper-s_ablation_6L
+  wandb_exp_name: whisper-s_ablation_6L_LoRA_final
   log_dir: ./logs
-  log_filename: eval_ablation_6L.log
+  log_filename: ablation_6L_lora.log
