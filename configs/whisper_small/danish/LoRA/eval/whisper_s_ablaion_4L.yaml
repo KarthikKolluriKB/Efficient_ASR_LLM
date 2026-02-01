@@ -81,8 +81,8 @@ train:
   # LoRA Configuration (must match training config!)
   use_lora: true
   lora:
-    r: 16
-    alpha: 32
+    r: 8
+    alpha: 16
     dropout: 0.1
     target_modules:
       - q_proj
