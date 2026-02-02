@@ -1,60 +1,99 @@
 """
-BERTScore Evaluation for Multilingual ASR
-Supports: Danish (da), Dutch (nl), English (en)
+Standalone BERTScore Evaluation for ASR Outputs
+
+Reads hypothesis/reference pairs from saved JSONL files and computes BERTScore.
+No model loading required - works directly on saved transcripts.
+
+Usage:
+    python eval_bertscore.py --input eval_results/test_examples.jsonl --lang nl
+    python eval_bertscore.py --input eval_results/test_examples.jsonl --lang da --output bert_results.json
+    python eval_bertscore.py --input path1.jsonl path2.jsonl --lang en  # Multiple files
 """
 
 import argparse
-from bert_score import score as bert_score
-from typing import List, Dict, Tuple
 import json
+import os
+from typing import List, Dict, Tuple
+from tqdm import tqdm
+
+try:
+    from bert_score import score as bert_score_fn
+except ImportError:
+    print("Please install bert-score: pip install bert-score")
+    exit(1)
 
 
-# Recommended models for multilingual BERTScore
-# xlm-roberta-large generally performs best for multilingual tasks
-LANG_TO_MODEL = {
-    "da": "xlm-roberta-large",  # Danish
-    "nl": "xlm-roberta-large",  # Dutch
-    "en": "xlm-roberta-large",  # English (could also use roberta-large for monolingual)
-    "multilingual": "xlm-roberta-large",  # Default for mixed/unknown
-}
+# XLM-RoBERTa-large for consistent multilingual evaluation
+MODEL_TYPE = "xlm-roberta-large"
 
 
-def calculate_bert_score(
-    predictions: List[str],
-    references: List[str],
-    lang: str = "multilingual",
-    model_type: str = None,
-    batch_size: int = 32,
-    verbose: bool = False,
-) -> Dict[str, float]:
+def load_jsonl(filepath: str) -> Tuple[List[str], List[str]]:
     """
-    Calculate BERTScore for ASR predictions.
+    Load hypotheses and references from JSONL file.
+    
+    Expected format (from eval.py):
+        {"id": 0, "reference": "...", "hypothesis": "..."}
+    
+    Returns:
+        Tuple of (hypotheses, references)
+    """
+    hypotheses = []
+    references = []
+    
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                hypotheses.append(entry["hypothesis"])
+                references.append(entry["reference"])
+            except json.JSONDecodeError as e:
+                print(f"Warning: Skipping malformed line {line_num}: {e}")
+            except KeyError as e:
+                print(f"Warning: Line {line_num} missing key {e}")
+    
+    return hypotheses, references
+
+
+def calculate_bertscore(
+    hypotheses: List[str],
+    references: List[str],
+    lang: str,
+    batch_size: int = 32,
+    verbose: bool = True,
+) -> Dict:
+    """
+    Calculate BERTScore for hypothesis-reference pairs.
     
     Args:
-        predictions: List of ASR hypotheses
-        references: List of ground truth transcriptions
-        lang: Language code ('da', 'nl', 'en', or 'multilingual')
-        model_type: Override model (default: xlm-roberta-large)
+        hypotheses: Model predictions
+        references: Ground truth transcriptions
+        lang: Language code (da, nl, en)
         batch_size: Batch size for scoring
-        verbose: Print progress
+        verbose: Show progress bar
         
     Returns:
-        Dictionary with P, R, F1 scores (mean and std)
+        Dictionary with precision, recall, F1 (mean and std)
     """
-    if model_type is None:
-        model_type = LANG_TO_MODEL.get(lang, LANG_TO_MODEL["multilingual"])
+    print(f"\nCalculating BERTScore...")
+    print(f"  Model: {MODEL_TYPE}")
+    print(f"  Language: {lang}")
+    print(f"  Samples: {len(hypotheses)}")
+    print(f"  Batch size: {batch_size}")
     
-    P, R, F1 = bert_score(
-        cands=predictions,
+    P, R, F1 = bert_score_fn(
+        cands=hypotheses,
         refs=references,
-        model_type=model_type,
-        lang=lang if lang != "multilingual" else None,
+        model_type=MODEL_TYPE,
+        lang=lang,
         batch_size=batch_size,
         verbose=verbose,
-        rescale_with_baseline=True,  # Recommended for interpretable scores
+        rescale_with_baseline=True,  # Normalize scores for interpretability
     )
     
-    return {
+    results = {
         "precision": {
             "mean": P.mean().item(),
             "std": P.std().item(),
@@ -67,153 +106,145 @@ def calculate_bert_score(
             "mean": F1.mean().item(),
             "std": F1.std().item(),
         },
-        "model": model_type,
-        "num_samples": len(predictions),
-    }
-
-
-def calculate_bert_score_per_sample(
-    predictions: List[str],
-    references: List[str],
-    lang: str = "multilingual",
-    model_type: str = None,
-    batch_size: int = 32,
-) -> Tuple[List[float], List[float], List[float]]:
-    """
-    Get per-sample BERTScores for detailed analysis.
-    
-    Returns:
-        Tuple of (precision_list, recall_list, f1_list)
-    """
-    if model_type is None:
-        model_type = LANG_TO_MODEL.get(lang, LANG_TO_MODEL["multilingual"])
-    
-    P, R, F1 = bert_score(
-        cands=predictions,
-        refs=references,
-        model_type=model_type,
-        lang=lang if lang != "multilingual" else None,
-        batch_size=batch_size,
-        rescale_with_baseline=True,
-    )
-    
-    return P.tolist(), R.tolist(), F1.tolist()
-
-
-def evaluate_asr_with_bertscore(
-    predictions: List[str],
-    references: List[str],
-    lang: str,
-    wer_scores: List[float] = None,
-) -> Dict:
-    """
-    Full evaluation combining BERTScore with optional WER correlation analysis.
-    """
-    results = calculate_bert_score(predictions, references, lang, verbose=True)
-    
-    if wer_scores is not None:
-        import numpy as np
-        _, _, f1_scores = calculate_bert_score_per_sample(predictions, references, lang)
-        
-        # Correlation between WER and BERTScore (expect negative correlation)
-        correlation = np.corrcoef(wer_scores, f1_scores)[0, 1]
-        results["wer_bertscore_correlation"] = correlation
-    
-    return results
-
-
-# Example integration with your evaluation pipeline
-def integrate_with_existing_eval(
-    eval_results: Dict,  # Your existing eval dict with 'predictions' and 'references'
-    lang: str,
-) -> Dict:
-    """
-    Add BERTScore to your existing evaluation results.
-    
-    Example usage with your pipeline:
-        eval_results = {
-            'predictions': [...],
-            'references': [...],
-            'wer': 0.15,
-            'cer': 0.08,
-        }
-        eval_results = integrate_with_existing_eval(eval_results, lang='nl')
-    """
-    bert_results = calculate_bert_score(
-        predictions=eval_results["predictions"],
-        references=eval_results["references"],
-        lang=lang,
-    )
-    
-    eval_results["bert_score"] = {
-        "precision": bert_results["precision"]["mean"],
-        "recall": bert_results["recall"]["mean"],
-        "f1": bert_results["f1"]["mean"],
+        "num_samples": len(hypotheses),
+        "model": MODEL_TYPE,
+        "lang": lang,
     }
     
-    return eval_results
+    return results, (P.tolist(), R.tolist(), F1.tolist())
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Calculate BERTScore for ASR")
-    parser.add_argument("--predictions", type=str, help="Path to predictions file (one per line)")
-    parser.add_argument("--references", type=str, help="Path to references file (one per line)")
-    parser.add_argument("--lang", type=str, default="multilingual", 
-                        choices=["da", "nl", "en", "multilingual"])
-    parser.add_argument("--output", type=str, default=None, help="Output JSON path")
-    parser.add_argument("--batch-size", type=int, default=32)
+def print_results(results: Dict):
+    """Pretty print BERTScore results."""
+    print("\n" + "=" * 60)
+    print("BERTSCORE RESULTS")
+    print("=" * 60)
+    print(f"Model:       {results['model']}")
+    print(f"Language:    {results['lang']}")
+    print(f"Samples:     {results['num_samples']}")
+    print("-" * 60)
+    print(f"Precision:   {results['precision']['mean']:.4f} (±{results['precision']['std']:.4f})")
+    print(f"Recall:      {results['recall']['mean']:.4f} (±{results['recall']['std']:.4f})")
+    print(f"F1:          {results['f1']['mean']:.4f} (±{results['f1']['std']:.4f})")
+    print("=" * 60)
+
+
+def save_results(
+    results: Dict,
+    output_path: str,
+    per_sample_scores: Tuple[List[float], List[float], List[float]] = None,
+    hypotheses: List[str] = None,
+    references: List[str] = None,
+):
+    """Save results to JSON file."""
+    output = {
+        "summary": results,
+    }
+    
+    # Optionally include per-sample scores
+    if per_sample_scores and hypotheses and references:
+        P, R, F1 = per_sample_scores
+        output["per_sample"] = [
+            {
+                "id": i,
+                "reference": ref,
+                "hypothesis": hyp,
+                "precision": p,
+                "recall": r,
+                "f1": f1,
+            }
+            for i, (ref, hyp, p, r, f1) in enumerate(zip(references, hypotheses, P, R, F1))
+        ]
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
+    
+    print(f"\nResults saved to: {output_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Calculate BERTScore from saved ASR evaluation outputs"
+    )
+    parser.add_argument(
+        "--input", "-i",
+        type=str,
+        nargs="+",
+        required=True,
+        help="Path(s) to JSONL file(s) with hypothesis/reference pairs"
+    )
+    parser.add_argument(
+        "--lang", "-l",
+        type=str,
+        required=True,
+        choices=["da", "nl", "en"],
+        help="Language code: da (Danish), nl (Dutch), en (English)"
+    )
+    parser.add_argument(
+        "--output", "-o",
+        type=str,
+        default=None,
+        help="Output JSON path for results (optional)"
+    )
+    parser.add_argument(
+        "--batch-size", "-b",
+        type=int,
+        default=32,
+        help="Batch size for BERTScore computation (default: 32)"
+    )
+    parser.add_argument(
+        "--save-per-sample",
+        action="store_true",
+        help="Include per-sample scores in output JSON"
+    )
     
     args = parser.parse_args()
     
-    if args.predictions and args.references:
-        with open(args.predictions, "r") as f:
-            predictions = [line.strip() for line in f]
-        with open(args.references, "r") as f:
-            references = [line.strip() for line in f]
+    # Load all JSONL files
+    all_hypotheses = []
+    all_references = []
+    
+    for filepath in args.input:
+        if not os.path.exists(filepath):
+            print(f"Error: File not found: {filepath}")
+            exit(1)
         
-        results = calculate_bert_score(
-            predictions, references, 
-            lang=args.lang, 
-            batch_size=args.batch_size,
-            verbose=True
+        print(f"Loading: {filepath}")
+        hyps, refs = load_jsonl(filepath)
+        print(f"  Loaded {len(hyps)} samples")
+        all_hypotheses.extend(hyps)
+        all_references.extend(refs)
+    
+    if not all_hypotheses:
+        print("Error: No samples loaded!")
+        exit(1)
+    
+    print(f"\nTotal samples: {len(all_hypotheses)}")
+    
+    # Calculate BERTScore
+    results, per_sample = calculate_bertscore(
+        all_hypotheses,
+        all_references,
+        lang=args.lang,
+        batch_size=args.batch_size,
+    )
+    
+    # Print results
+    print_results(results)
+    
+    # Save if output path specified
+    if args.output:
+        save_results(
+            results,
+            args.output,
+            per_sample_scores=per_sample if args.save_per_sample else None,
+            hypotheses=all_hypotheses if args.save_per_sample else None,
+            references=all_references if args.save_per_sample else None,
         )
-        
-        print(f"\n{'='*50}")
-        print(f"BERTScore Results ({args.lang})")
-        print(f"{'='*50}")
-        print(f"Model: {results['model']}")
-        print(f"Samples: {results['num_samples']}")
-        print(f"Precision: {results['precision']['mean']:.4f} (±{results['precision']['std']:.4f})")
-        print(f"Recall:    {results['recall']['mean']:.4f} (±{results['recall']['std']:.4f})")
-        print(f"F1:        {results['f1']['mean']:.4f} (±{results['f1']['std']:.4f})")
-        
-        if args.output:
-            with open(args.output, "w") as f:
-                json.dump(results, f, indent=2)
-            print(f"\nResults saved to {args.output}")
-    else:
-        # Demo with example data
-        print("Running demo with example data...")
-        
-        # Example: comparing exact match vs semantic equivalent
-        demo_refs = [
-            "I went to the store yesterday",
-            "The meeting is at three o'clock",
-            "She did not want to go",
-        ]
-        demo_preds = [
-            "I went to the store yesterday",  # Exact match
-            "The meeting is at 3 o'clock",     # Number format difference
-            "She didn't want to go",           # Contraction difference
-        ]
-        
-        results = calculate_bert_score(demo_preds, demo_refs, lang="en", verbose=True)
-        
-        print(f"\nDemo Results:")
-        print(f"F1: {results['f1']['mean']:.4f}")
-        
-        # Show per-sample scores
-        P, R, F1 = calculate_bert_score_per_sample(demo_preds, demo_refs, lang="en")
-        print(f"\nPer-sample F1 scores:")
-        for ref, pred, f1 in zip(demo_refs, demo_preds, F1):
-            print(f"  {f1:.4f}: '{pred}' vs '{ref}'")
+    
+    # Return F1 for easy scripting
+    return results["f1"]["mean"]
+
+
+if __name__ == "__main__":
+    main()
