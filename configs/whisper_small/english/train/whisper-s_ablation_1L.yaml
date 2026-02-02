@@ -1,0 +1,140 @@
+# =============================================================================
+# English Common Voice Training Configuration (Projector-Only)
+# =============================================================================
+# Training config for English Common Voice (~100 hours, ~40,000 samples)
+# Whisper-small (1 encoder layers) + Qwen2.5-3B + concatLinear projector
+# Only projector is trained (freeze_llm=true, freeze_encoder=true)
+#
+# Calculation:
+#   - samples: 80,000
+#   - batch_size: 8
+#   - steps_per_epoch: 80,000 / 8 = 10,000
+#   - num_epochs: 2 
+#   - total_steps: 10,000 × 2 = 20,000
+#   - warmup_steps: 5% of total = 1,000
+# =============================================================================
+
+
+model:
+  model_name: ASRLLM
+  file: models/model.py:ASRLLM
+  
+  # LLM Configuration
+  llm_model_name: qwen2.5-3B
+  llm_model: Qwen/Qwen2.5-3B
+  llm_dim: 2048
+  llm_model_path: null
+  llm_type: decoder_only
+  
+  # Encoder Configuration
+  encoder_model_name: whisper-small
+  encoder_model: small
+  encoder_ds_rate: 2
+  encoder_model_path: null
+  encoder_dim: 768
+  encoder_num_layers: 1       
+  
+  # Projector Configuration
+  projector: concatLinear
+  projector_ds_rate: 5
+  projector_hidden_dim: 2048
+  projector_dropout: 0.1
+  modal: audio
+  normalize: false
+  encoder_type: finetune
+
+
+train:
+  model_name: ASRLLM
+  run_validation: true
+  
+  # Batch Configuration
+  batch_size: 8
+  val_batch_size: 8
+  gradient_accumulation_steps: 1
+  num_workers: 4
+  max_eval_batches: 200
+  
+  # Generation Configuration
+  max_new_tokens: 128
+  repetition_penalty: 1.5
+  
+  # Training Schedule
+  num_epochs: 2
+  total_steps: 20000
+  warmup_steps: 1000
+  validation_interval: 1000
+  
+  # Optimizer Configuration
+  lr: 1.0e-4
+  weight_decay: 0.01
+  grad_clip: 1.0
+  gamma: 0.85
+  
+  # Precision Configuration
+  use_fp16: false
+  mixed_precision: true
+  quantization: false
+  
+  # Freezing Configuration (Projector-Only Training)
+  freeze_llm: true
+  freeze_encoder: true
+  freeze_layers: false
+  num_freeze_layers: 0
+  
+  # Output Configuration
+  output_dir: outputs/english/whisper-small/ablation_1L/
+  save_model: true
+  seed: 42
+  
+  # Other Configuration
+  one_gpu: true
+  use_peft: false
+  use_fast_kernels: false
+  batching_strategy: packing
+  context_length: 384
+
+
+
+scheduler:
+  name: cosine_with_warmup
+  total_training_steps: 20000
+  warmup_steps: 1000    
+  min_lr_ratio: 0.1
+
+
+early_stopping:
+  monitor: val/wer
+  mode: min
+  patience: 3
+  min_delta: 0.001
+
+
+data:
+  dataset: speech_dataset
+  file: datamodule/dataset.py:get_speech_dataset
+  hf_dataset_path: data/cv22_hf/en
+  train_split: train
+  val_split: validation
+  test_split: test
+  use_raw_transcription: false
+  input_type: mel
+  mel_size: 80
+  normalize: false
+  projector_ds_rate: 5
+  use_variable_length: true
+  max_audio_length: 30
+  fix_length_audio: -1
+  max_target_chars: 500
+  inference_mode: false
+
+
+log:
+  use_wandb: true
+  wandb_dir: ./wandb
+  wandb_entity_name: null
+  wandb_project_name: SLAM_ASR_English_ABLATIONS
+  wandb_exp_name: whisper-s_english_ablation_1L
+  log_dir: ./logs
+  log_filename: whisper-s_english_ablation_1L.log
+  log_interval: 100
