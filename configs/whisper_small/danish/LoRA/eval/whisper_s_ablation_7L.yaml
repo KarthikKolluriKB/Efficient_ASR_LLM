@@ -7,6 +7,7 @@
 #   python eval.py --config configs/eval_baseline_lora.yaml --ckpt_path path/to/checkpoint.pt
 # =============================================================================
 
+
 # -----------------------------------------------------------------------------
 # Model Configuration (must match training config!)
 # -----------------------------------------------------------------------------
@@ -38,16 +39,17 @@ model:
   normalize: false
   encoder_type: finetune
 
+
 # -----------------------------------------------------------------------------
 # Evaluation Configuration
 # -----------------------------------------------------------------------------
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
   # NOTE: LoRA checkpoints are named checkpoint_best_wer.pt (not projector_best_wer.pt)
-  projector_path: outputs/danish/whisper-s_ablation_7L_lora/checkpoint_best_wer.pt
+  projector_path: outputs/whisper_small/danish/LoRA/whisper-s_ablation_7L_LoRA_f/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
-  batch_size: 4
+  batch_size: 32
   num_workers: 4
   
   # Generation settings
@@ -59,8 +61,9 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/danish/whisper-s_ablation_7L_lora/eval/
+  output_dir: outputs/whisper_small/danish/LoRA/whisper-s_ablation_7L_LoRA_f/eval/
   save_predictions: true
+
 
 # -----------------------------------------------------------------------------
 # Train Configuration (needed for model building - must match training!)
@@ -70,8 +73,8 @@ train:
   batch_size: 8
   val_batch_size: 8
   num_workers: 4
-  output_dir: outputs/danish/whisper-s_ablation_7L_lora/
-  freeze_llm: false              # Must be false for LoRA
+  output_dir: outputs/whisper_small/danish/LoRA/whisper-s_ablation_7L_LoRA_f/
+  freeze_llm: true             
   freeze_encoder: true
   mixed_precision: true
   quantization: false
@@ -81,14 +84,15 @@ train:
   # LoRA Configuration (must match training config!)
   use_lora: true
   lora:
-    r: 16
-    alpha: 32
+    r: 8
+    alpha: 16
     dropout: 0.1
     target_modules:
       - q_proj
       - v_proj
       - k_proj
       - o_proj
+
 
 # -----------------------------------------------------------------------------
 # Data Configuration
@@ -111,6 +115,7 @@ data:
   max_target_chars: 500
   inference_mode: true           
 
+
 # -----------------------------------------------------------------------------
 # Logging Configuration
 # -----------------------------------------------------------------------------
@@ -118,7 +123,7 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_Danish_ABLATIONS_LoRA
-  wandb_exp_name: eval_whisper-s_ablation_7L
+  wandb_project_name: SLAM_ASR_Danish
+  wandb_exp_name: eval_whisper-s_ablation_7L_LoRA_f
   log_dir: ./logs
-  log_filename: eval_ablation_7L.log
+  log_filename: eval_ablation_7L_LoRA_f.log

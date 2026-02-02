@@ -1,10 +1,10 @@
 # =============================================================================
-# Evaluation Config - Whisper-small Ablation (9 Layers) + LoRA
+# Evaluation Config - Whisper-small Baseline (1 Layers)
 # =============================================================================
 # Usage:
-#   python eval.py --config configs/eval_baseline_lora.yaml
-#   python eval.py --config configs/eval_baseline_lora.yaml --num_beams 2
-#   python eval.py --config configs/eval_baseline_lora.yaml --ckpt_path path/to/checkpoint.pt
+#   python eval.py --config configs/eval_baseline.yaml
+#   python eval.py --config configs/eval_baseline.yaml --num_beams 2
+#   python eval.py --config configs/eval_baseline.yaml --ckpt_path path/to/checkpoint.pt
 # =============================================================================
 
 
@@ -28,7 +28,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 768
-  encoder_num_layers: 9       
+  encoder_num_layers: 1       
   
   # Projector settings
   projector: concatLinear
@@ -45,8 +45,7 @@ model:
 # -----------------------------------------------------------------------------
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
-  # NOTE: LoRA checkpoints are named checkpoint_best_wer.pt (not projector_best_wer.pt)
-  projector_path: outputs/whisper_small/danish/LoRA/whisper-s_ablation_9L_LoRA_f/checkpoint_best_wer.pt
+  projector_path: outputs/whisper_small/danish/whisper-s_ablation_1L/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
   batch_size: 32
@@ -61,37 +60,25 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/whisper_small/danish/LoRA/whisper-s_ablation_9L_LoRA_f/eval/
+  output_dir: outputs/whisper_small/danish/whisper-s_ablation_1L/eval/
   save_predictions: true
 
 
 # -----------------------------------------------------------------------------
-# Train Configuration (needed for model building - must match training!)
+# Train Configuration (needed for model building)
 # -----------------------------------------------------------------------------
 train:
   model_name: ASRLLM
-  batch_size: 8
-  val_batch_size: 8
+  batch_size: 4
+  val_batch_size: 4
   num_workers: 4
-  output_dir: outputs/whisper_small/danish/LoRA/whisper-s_ablation_9L_LoRA_f/
-  freeze_llm: true             
+  output_dir: outputs/whisper_small/danish/whisper-s_ablation_1L/
+  freeze_llm: true
   freeze_encoder: true
   mixed_precision: true
   quantization: false
   one_gpu: true
-  use_peft: true
-  
-  # LoRA Configuration (must match training config!)
-  use_lora: true
-  lora:
-    r: 8
-    alpha: 16
-    dropout: 0.1
-    target_modules:
-      - q_proj
-      - v_proj
-      - k_proj
-      - o_proj
+  use_peft: false
 
 
 # -----------------------------------------------------------------------------
@@ -113,7 +100,7 @@ data:
   max_audio_length: 30
   fix_length_audio: -1
   max_target_chars: 500
-  inference_mode: true           
+  inference_mode: true           # IMPORTANT: Must be true for evaluation!
 
 
 # -----------------------------------------------------------------------------
@@ -123,7 +110,7 @@ log:
   use_wandb: true
   wandb_dir: ./wandb
   wandb_entity_name: null
-  wandb_project_name: SLAM_ASR_Danish
-  wandb_exp_name: eval_whisper-s_ablation_9L_LoRA_f
+  wandb_project_name: SLAM_ASR_Danish_ABLATIONS
+  wandb_exp_name: eval_whisper-s_ablation_1L
   log_dir: ./logs
-  log_filename: eval_ablation_9L_LoRA_f.log
+  log_filename: eval_ablation_1L.log
