@@ -1,41 +1,25 @@
 """
-Batch BERTScore Evaluation with Directory Scanning
+Batch BERTScore Evaluation from Path List
 
-Scans a root directory for experiment outputs and computes BERTScore for each.
+Reads evaluation folder paths from a text file and computes BERTScore for each.
 Creates a summary CSV with all results.
 
-Directory structure expected:
-    rootdir/
-    ├── baseline/eval/test_examples.jsonl
-    ├── ablation_11L/eval/test_examples.jsonl
-    ├── ablation_10L/eval/test_examples.jsonl
-    └── ...
-
-Output structure created:
-    rootdir/
-    ├── bert_scores/
-    │   ├── model_name_lang/
-    │   │   ├── baseline_bert_results.json
-    │   │   ├── ablation_11L_bert_results.json
-    │   │   └── ...
-    │   └── summary_model_name_lang.csv
-    └── ...
+Input text file format (one path per line):
+    /path/to/baseline/eval/test_examples.jsonl
+    /path/to/ablation_11L/eval/test_examples.jsonl
+    /path/to/ablation_10L/eval/test_examples.jsonl
 
 Usage:
-    python eval_bertscore_batch.py --root_dir outputs/ --model_name whisper_large --lang nl
-    python eval_bertscore_batch.py --root_dir outputs/ --model_name whisper_large --lang da --batch_size 16
-    python eval_bertscore_batch.py --root_dir outputs/ --model_name whisper_large --lang nl --parallel
+    python eval_bertscore_batch.py --input_file paths.txt --model_name whisper_large --lang nl --output_dir results/
+    python eval_bertscore_batch.py --input_file paths.txt --model_name whisper_large --lang da --batch_size 16
 """
 
 import argparse
 import json
 import os
-import glob
 import csv
 from typing import List, Dict, Tuple
 from datetime import datetime
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import multiprocessing
 
 try:
     from bert_score import score as bert_score_fn
@@ -68,6 +52,41 @@ def load_jsonl(filepath: str) -> Tuple[List[str], List[str]]:
                 print(f"  Warning: Line {line_num} missing key {e}")
     
     return hypotheses, references
+
+
+def load_paths_from_file(filepath: str) -> List[str]:
+    """Load paths from text file (one path per line)."""
+    paths = []
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            # Skip empty lines and comments
+            if line and not line.startswith('#'):
+                paths.append(line)
+    return paths
+
+
+def extract_exp_name(jsonl_path: str) -> str:
+    """
+    Extract experiment name from path.
+    
+    Examples:
+        /path/to/baseline/eval/test_examples.jsonl -> baseline
+        /path/to/ablation_11L/eval/test_examples.jsonl -> ablation_11L
+    """
+    parts = jsonl_path.rstrip('/').split(os.sep)
+    
+    # Find 'eval' in path and get the folder before it
+    for i, part in enumerate(parts):
+        if part == 'eval' and i > 0:
+            return parts[i - 1]
+    
+    # Fallback: use parent of parent folder
+    if len(parts) >= 3:
+        return parts[-3]
+    
+    # Last resort: use filename without extension
+    return os.path.splitext(os.path.basename(jsonl_path))[0]
 
 
 def calculate_bertscore(
@@ -161,26 +180,6 @@ def process_single_experiment(
     return results
 
 
-def discover_experiments(root_dir: str, pattern: str = "*/eval/test_examples.jsonl") -> List[Tuple[str, str]]:
-    """
-    Discover all experiment directories matching the pattern.
-    
-    Returns:
-        List of (experiment_name, jsonl_path) tuples
-    """
-    search_pattern = os.path.join(root_dir, pattern)
-    jsonl_files = glob.glob(search_pattern)
-    
-    experiments = []
-    for jsonl_path in sorted(jsonl_files):
-        # Extract experiment name from path: rootdir/EXP_NAME/eval/test_examples.jsonl
-        rel_path = os.path.relpath(jsonl_path, root_dir)
-        exp_name = rel_path.split(os.sep)[0]
-        experiments.append((exp_name, jsonl_path))
-    
-    return experiments
-
-
 def create_summary_csv(
     results: List[Dict],
     output_path: str,
@@ -247,13 +246,13 @@ def print_summary_table(results: List[Dict], model_name: str, lang: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Batch BERTScore evaluation with directory scanning"
+        description="Batch BERTScore evaluation from path list"
     )
     parser.add_argument(
-        "--root_dir", "-r",
+        "--input_file", "-i",
         type=str,
         required=True,
-        help="Root directory containing experiment folders"
+        help="Text file with paths to test_examples.jsonl files (one per line)"
     )
     parser.add_argument(
         "--model_name", "-m",
@@ -269,10 +268,10 @@ def main():
         help="Language code: da (Danish), nl (Dutch), en (English)"
     )
     parser.add_argument(
-        "--pattern", "-p",
+        "--output_dir", "-o",
         type=str,
-        default="*/eval/test_examples.jsonl",
-        help="Glob pattern to find JSONL files (default: */eval/test_examples.jsonl)"
+        default=".",
+        help="Output directory for bert_scores folder (default: current directory)"
     )
     parser.add_argument(
         "--batch_size", "-b",
@@ -280,95 +279,65 @@ def main():
         default=32,
         help="Batch size for BERTScore computation (default: 32)"
     )
-    parser.add_argument(
-        "--parallel",
-        action="store_true",
-        help="Process experiments in parallel (use with caution - high GPU memory)"
-    )
-    parser.add_argument(
-        "--num_workers",
-        type=int,
-        default=2,
-        help="Number of parallel workers (default: 2)"
-    )
     
     args = parser.parse_args()
     
-    # Validate root directory
-    if not os.path.isdir(args.root_dir):
-        print(f"Error: Root directory not found: {args.root_dir}")
+    # Validate input file
+    if not os.path.isfile(args.input_file):
+        print(f"Error: Input file not found: {args.input_file}")
         exit(1)
     
-    # Discover experiments
-    print(f"\nScanning: {args.root_dir}")
-    print(f"Pattern:  {args.pattern}")
-    experiments = discover_experiments(args.root_dir, args.pattern)
+    # Load paths
+    print(f"\nLoading paths from: {args.input_file}")
+    paths = load_paths_from_file(args.input_file)
+    
+    if not paths:
+        print("❌ No paths found in input file!")
+        exit(1)
+    
+    # Validate paths and extract experiment names
+    experiments = []
+    print(f"\nFound {len(paths)} paths:")
+    for jsonl_path in paths:
+        if not os.path.isfile(jsonl_path):
+            print(f"  ⚠️  File not found: {jsonl_path}")
+            continue
+        exp_name = extract_exp_name(jsonl_path)
+        experiments.append((exp_name, jsonl_path))
+        print(f"  • {exp_name}: {jsonl_path}")
     
     if not experiments:
-        print(f"❌ No experiments found matching pattern: {args.pattern}")
+        print("❌ No valid paths found!")
         exit(1)
-    
-    print(f"\nFound {len(experiments)} experiments:")
-    for exp_name, jsonl_path in experiments:
-        print(f"  • {exp_name}")
     
     # Create output directory
     output_folder = f"{args.model_name}_{args.lang}"
-    output_dir = os.path.join(args.root_dir, "bert_scores", output_folder)
+    output_dir = os.path.join(args.output_dir, "bert_scores", output_folder)
     os.makedirs(output_dir, exist_ok=True)
     print(f"\nOutput directory: {output_dir}")
     
-    # Process experiments
+    # Process experiments sequentially
     all_results = []
-    
-    if args.parallel and len(experiments) > 1:
-        print(f"\n⚡ Running in parallel mode with {args.num_workers} workers")
-        print("   (Note: May require high GPU memory)")
-        
-        # Parallel processing - be careful with GPU memory
-        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-            futures = {
-                executor.submit(
-                    process_single_experiment,
-                    jsonl_path,
-                    exp_name,
-                    args.lang,
-                    args.batch_size,
-                    output_dir,
-                ): exp_name
-                for exp_name, jsonl_path in experiments
-            }
-            
-            for future in as_completed(futures):
-                exp_name = futures[future]
-                try:
-                    result = future.result()
-                    if result:
-                        all_results.append(result)
-                except Exception as e:
-                    print(f"❌ Error processing {exp_name}: {e}")
-    else:
-        # Sequential processing (default - safer for GPU)
-        for exp_name, jsonl_path in experiments:
-            try:
-                result = process_single_experiment(
-                    jsonl_path,
-                    exp_name,
-                    args.lang,
-                    args.batch_size,
-                    output_dir,
-                )
-                if result:
-                    all_results.append(result)
-            except Exception as e:
-                print(f"❌ Error processing {exp_name}: {e}")
+    for exp_name, jsonl_path in experiments:
+        try:
+            result = process_single_experiment(
+                jsonl_path,
+                exp_name,
+                args.lang,
+                args.batch_size,
+                output_dir,
+            )
+            if result:
+                all_results.append(result)
+        except Exception as e:
+            print(f"❌ Error processing {exp_name}: {e}")
     
     if not all_results:
         print("\n❌ No results collected!")
         exit(1)
     
     # Create summary CSV
-    summary_path = os.path.join(args.root_dir, "bert_scores", f"summary_{output_folder}.csv")
+    summary_path = os.path.join(args.output_dir, "bert_scores", f"summary_{output_folder}.csv")
     create_summary_csv(all_results, summary_path, args.model_name, args.lang)
     
     # Print summary table
