@@ -1,93 +1,182 @@
 """
-Batch BERTScore Evaluation from Path List
+Batch BERTScore Evaluation for Multilingual ASR
 
-Reads evaluation folder paths from a text file and computes BERTScore for each.
-Creates a summary CSV with all results.
+Computes BERTScore for ASR evaluation across multiple experiments.
+Designed for Danish, Dutch, and English ASR evaluation with fair
+cross-lingual comparison using consistent configuration.
 
-Input text file format (one path per line):
-    /path/to/baseline/eval/test_examples.jsonl
-    /path/to/ablation_11L/eval/test_examples.jsonl
-    /path/to/ablation_10L/eval/test_examples.jsonl
+Configuration:
+    - Model: xlm-roberta-large (best multilingual model)
+    - Layer: 17 (optimal for xlm-roberta-large per BERTScore paper)
+    - Rescaling: Disabled by default (for cross-lingual fairness)
+
+Input format (JSONL, one entry per line):
+    {"id": 0, "reference": "ground truth text", "hypothesis": "asr output"}
 
 Usage:
-    python eval_bertscore_batch.py --input_file paths.txt --model_name whisper_large --lang nl --output_dir results/
-    python eval_bertscore_batch.py --input_file paths.txt --model_name whisper_large --lang da --batch_size 16
+    python eval_bertscore.py --input_file paths.txt --model_name whisper_small --lang da
+    python eval_bertscore.py --input_file paths.txt --model_name whisper_small --lang nl
+    python eval_bertscore.py --input_file paths.txt --model_name whisper_small --lang en
+
+Reference:
+    Zhang et al. (2020). BERTScore: Evaluating Text Generation with BERT. ICLR.
 """
 
 import argparse
 import json
 import os
 import csv
-from typing import List, Dict, Tuple
+import warnings
+from typing import List, Dict, Tuple, Optional
 from datetime import datetime
 
 try:
-    from bert_score import score as bert_score_fn
+    import numpy as np
 except ImportError:
-    print("Please install bert-score: pip install bert-score")
+    print("Error: numpy is required. Install with: pip install numpy")
+    exit(1)
+
+try:
+    from bert_score import score as bert_score_fn
+    from bert_score import __version__ as BERT_SCORE_VERSION
+except ImportError:
+    print("Error: bert-score is required. Install with: pip install bert-score")
+    exit(1)
+
+try:
+    import torch
+except ImportError:
+    print("Error: torch is required. Install with: pip install torch")
     exit(1)
 
 
-# XLM-RoBERTa-large for consistent multilingual evaluation
+# =============================================================================
+# Configuration
+# =============================================================================
+
 MODEL_TYPE = "xlm-roberta-large"
+NUM_LAYERS = 17
+RESCALE_WITH_BASELINE = False
+
+SUPPORTED_LANGUAGES = {
+    "da": "Danish",
+    "nl": "Dutch",
+    "en": "English",
+    "de": "German",
+    "fr": "French",
+    "es": "Spanish",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "sv": "Swedish",
+    "no": "Norwegian",
+}
 
 
-def load_jsonl(filepath: str) -> Tuple[List[str], List[str]]:
-    """Load hypotheses and references from JSONL file."""
+# =============================================================================
+# Utility Functions
+# =============================================================================
+
+def print_configuration(lang: str, rescale: bool) -> None:
+    """Print evaluation configuration."""
+    print("")
+    print("=" * 70)
+    print("BERTScore Configuration")
+    print("=" * 70)
+    print("  bert_score version : {}".format(BERT_SCORE_VERSION))
+    print("  PyTorch version    : {}".format(torch.__version__))
+    print("  CUDA available     : {}".format(torch.cuda.is_available()))
+    if torch.cuda.is_available():
+        print("  GPU                : {}".format(torch.cuda.get_device_name(0)))
+    print("  Model              : {}".format(MODEL_TYPE))
+    print("  Layer              : {}".format(NUM_LAYERS))
+    print("  Language           : {} ({})".format(lang, SUPPORTED_LANGUAGES.get(lang, "Unknown")))
+    print("  Rescale baseline   : {}".format(rescale))
+    print("=" * 70)
+
+
+def load_jsonl(filepath: str) -> Tuple[List[str], List[str], List[dict]]:
+    """
+    Load hypotheses and references from JSONL file.
+
+    Args:
+        filepath: Path to JSONL file.
+
+    Returns:
+        Tuple of (hypotheses, references, metadata).
+    """
     hypotheses = []
     references = []
-    
-    with open(filepath, 'r', encoding='utf-8') as f:
+    metadata = []
+
+    with open(filepath, "r", encoding="utf-8") as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
             try:
                 entry = json.loads(line)
-                hypotheses.append(entry["hypothesis"])
-                references.append(entry["reference"])
+
+                hyp = entry.get("hypothesis") or entry.get("hyp") or entry.get("pred")
+                ref = entry.get("reference") or entry.get("ref") or entry.get("target")
+
+                if hyp is None or ref is None:
+                    print("  Warning: Line {} missing hypothesis or reference".format(line_num))
+                    continue
+
+                hypotheses.append(str(hyp))
+                references.append(str(ref))
+                metadata.append(entry)
+
             except json.JSONDecodeError as e:
-                print(f"  Warning: Skipping malformed line {line_num}: {e}")
-            except KeyError as e:
-                print(f"  Warning: Line {line_num} missing key {e}")
-    
-    return hypotheses, references
+                print("  Warning: Skipping malformed line {}: {}".format(line_num, e))
+
+    return hypotheses, references, metadata
 
 
 def load_paths_from_file(filepath: str) -> List[str]:
-    """Load paths from text file (one path per line)."""
+    """
+    Load experiment paths from text file.
+
+    Args:
+        filepath: Path to text file with one path per line.
+
+    Returns:
+        List of paths.
+    """
     paths = []
-    with open(filepath, 'r', encoding='utf-8') as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            # Skip empty lines and comments
-            if line and not line.startswith('#'):
+            if line and not line.startswith("#"):
                 paths.append(line)
     return paths
 
 
-def extract_exp_name(jsonl_path: str) -> str:
+def extract_experiment_name(jsonl_path: str) -> str:
     """
-    Extract experiment name from path.
-    
-    Examples:
-        /path/to/baseline/eval/test_examples.jsonl -> baseline
-        /path/to/ablation_11L/eval/test_examples.jsonl -> ablation_11L
+    Extract experiment name from file path.
+
+    Args:
+        jsonl_path: Path to JSONL file.
+
+    Returns:
+        Experiment name string.
     """
-    parts = jsonl_path.rstrip('/').split(os.sep)
-    
-    # Find 'eval' in path and get the folder before it
+    parts = jsonl_path.rstrip("/").split(os.sep)
+
     for i, part in enumerate(parts):
-        if part == 'eval' and i > 0:
+        if part == "eval" and i > 0:
             return parts[i - 1]
-    
-    # Fallback: use parent of parent folder
+
     if len(parts) >= 3:
         return parts[-3]
-    
-    # Last resort: use filename without extension
+
     return os.path.splitext(os.path.basename(jsonl_path))[0]
 
+
+# =============================================================================
+# BERTScore Calculation
+# =============================================================================
 
 def calculate_bertscore(
     hypotheses: List[str],
@@ -95,257 +184,379 @@ def calculate_bertscore(
     lang: str,
     batch_size: int = 32,
     verbose: bool = False,
+    rescale: bool = RESCALE_WITH_BASELINE,
 ) -> Dict:
-    """Calculate BERTScore for hypothesis-reference pairs."""
-    
+    """
+    Calculate BERTScore for hypothesis-reference pairs.
+
+    Args:
+        hypotheses: List of hypothesis strings.
+        references: List of reference strings.
+        lang: Language code (e.g., 'da', 'nl', 'en').
+        batch_size: Batch size for processing.
+        verbose: Whether to print progress.
+        rescale: Whether to apply baseline rescaling.
+
+    Returns:
+        Dictionary containing precision, recall, F1 statistics.
+    """
+    if not rescale:
+        warnings.filterwarnings("ignore", message=".*baseline.*")
+
     P, R, F1 = bert_score_fn(
         cands=hypotheses,
         refs=references,
         model_type=MODEL_TYPE,
+        num_layers=NUM_LAYERS,
         lang=lang,
         batch_size=batch_size,
         verbose=verbose,
-        rescale_with_baseline=True,
+        rescale_with_baseline=rescale,
+        use_fast_tokenizer=True,
     )
-    
+
+    P_np = P.numpy()
+    R_np = R.numpy()
+    F1_np = F1.numpy()
+
     results = {
         "precision": {
-            "mean": P.mean().item(),
-            "std": P.std().item(),
+            "mean": float(P_np.mean()),
+            "std": float(P_np.std()),
+            "min": float(P_np.min()),
+            "max": float(P_np.max()),
+            "median": float(np.median(P_np)),
         },
         "recall": {
-            "mean": R.mean().item(),
-            "std": R.std().item(),
+            "mean": float(R_np.mean()),
+            "std": float(R_np.std()),
+            "min": float(R_np.min()),
+            "max": float(R_np.max()),
+            "median": float(np.median(R_np)),
         },
         "f1": {
-            "mean": F1.mean().item(),
-            "std": F1.std().item(),
+            "mean": float(F1_np.mean()),
+            "std": float(F1_np.std()),
+            "min": float(F1_np.min()),
+            "max": float(F1_np.max()),
+            "median": float(np.median(F1_np)),
         },
         "num_samples": len(hypotheses),
-        "model": MODEL_TYPE,
-        "lang": lang,
+        "config": {
+            "model": MODEL_TYPE,
+            "num_layers": NUM_LAYERS,
+            "lang": lang,
+            "rescaled": rescale,
+            "bert_score_version": BERT_SCORE_VERSION,
+        },
+        "per_example": {
+            "precision": P_np.tolist(),
+            "recall": R_np.tolist(),
+            "f1": F1_np.tolist(),
+        },
     }
-    
+
     return results
 
 
-def process_single_experiment(
+# =============================================================================
+# Experiment Processing
+# =============================================================================
+
+def process_experiment(
     jsonl_path: str,
     exp_name: str,
     lang: str,
     batch_size: int,
     output_dir: str,
-) -> Dict:
-    """Process a single experiment and save results."""
-    
-    print(f"\n{'='*60}")
-    print(f"Processing: {exp_name}")
-    print(f"{'='*60}")
-    print(f"  Input: {jsonl_path}")
-    
-    # Load data
-    hypotheses, references = load_jsonl(jsonl_path)
-    print(f"  Samples: {len(hypotheses)}")
-    
+    rescale: bool = RESCALE_WITH_BASELINE,
+) -> Optional[Dict]:
+    """
+    Process a single experiment.
+
+    Args:
+        jsonl_path: Path to JSONL file.
+        exp_name: Experiment name.
+        lang: Language code.
+        batch_size: Batch size for processing.
+        output_dir: Output directory.
+        rescale: Whether to apply baseline rescaling.
+
+    Returns:
+        Results dictionary or None if processing failed.
+    """
+    print("")
+    print("-" * 70)
+    print("Processing: {}".format(exp_name))
+    print("-" * 70)
+    print("  Input: {}".format(jsonl_path))
+
+    hypotheses, references, metadata = load_jsonl(jsonl_path)
+    print("  Samples: {}".format(len(hypotheses)))
+
     if not hypotheses:
-        print(f"  ❌ No samples found, skipping...")
+        print("  No samples found, skipping.")
         return None
-    
-    # Calculate BERTScore
+
     results = calculate_bertscore(
         hypotheses,
         references,
         lang=lang,
         batch_size=batch_size,
         verbose=True,
+        rescale=rescale,
     )
-    
-    # Add experiment metadata
+
     results["experiment"] = exp_name
     results["input_path"] = jsonl_path
     results["timestamp"] = datetime.now().isoformat()
-    
-    # Save individual result
+
     os.makedirs(output_dir, exist_ok=True)
-    result_path = os.path.join(output_dir, f"{exp_name}_bert_results.json")
-    with open(result_path, 'w', encoding='utf-8') as f:
+    result_path = os.path.join(output_dir, "{}_bertscore.json".format(exp_name))
+    with open(result_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
-    print(f"  Saved: {result_path}")
-    
-    # Print summary
-    print(f"  Precision: {results['precision']['mean']:.4f} (±{results['precision']['std']:.4f})")
-    print(f"  Recall:    {results['recall']['mean']:.4f} (±{results['recall']['std']:.4f})")
-    print(f"  F1:        {results['f1']['mean']:.4f} (±{results['f1']['std']:.4f})")
-    
+    print("  Saved: {}".format(result_path))
+
+    print("")
+    print("  Results:")
+    print("    Precision : {:.4f} (+/-{:.4f})".format(
+        results["precision"]["mean"], results["precision"]["std"]))
+    print("    Recall    : {:.4f} (+/-{:.4f})".format(
+        results["recall"]["mean"], results["recall"]["std"]))
+    print("    F1        : {:.4f} (+/-{:.4f})".format(
+        results["f1"]["mean"], results["f1"]["std"]))
+    print("    F1 range  : [{:.4f}, {:.4f}]".format(
+        results["f1"]["min"], results["f1"]["max"]))
+
     return results
 
+
+# =============================================================================
+# Output Generation
+# =============================================================================
 
 def create_summary_csv(
     results: List[Dict],
     output_path: str,
     model_name: str,
     lang: str,
-):
-    """Create summary CSV with all experiment results."""
-    
-    # Sort by experiment name
+) -> None:
+    """
+    Create summary CSV file.
+
+    Args:
+        results: List of result dictionaries.
+        output_path: Output CSV path.
+        model_name: Model name for reference.
+        lang: Language code.
+    """
     results = sorted(results, key=lambda x: x["experiment"])
-    
-    with open(output_path, 'w', newline='', encoding='utf-8') as f:
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        
-        # Header
+
         writer.writerow([
-            "exp_name",
-            "avg_precision",
-            "avg_recall", 
-            "avg_f1",
-            "std_precision",
-            "std_recall",
-            "std_f1",
+            "experiment",
+            "language",
             "num_samples",
+            "precision_mean",
+            "precision_std",
+            "recall_mean",
+            "recall_std",
+            "f1_mean",
+            "f1_std",
+            "f1_min",
+            "f1_max",
+            "f1_median",
+            "model",
+            "num_layers",
+            "rescaled",
         ])
-        
-        # Data rows
+
         for r in results:
             writer.writerow([
                 r["experiment"],
-                f"{r['precision']['mean']:.4f}",
-                f"{r['recall']['mean']:.4f}",
-                f"{r['f1']['mean']:.4f}",
-                f"{r['precision']['std']:.4f}",
-                f"{r['recall']['std']:.4f}",
-                f"{r['f1']['std']:.4f}",
+                r["config"]["lang"],
                 r["num_samples"],
+                "{:.4f}".format(r["precision"]["mean"]),
+                "{:.4f}".format(r["precision"]["std"]),
+                "{:.4f}".format(r["recall"]["mean"]),
+                "{:.4f}".format(r["recall"]["std"]),
+                "{:.4f}".format(r["f1"]["mean"]),
+                "{:.4f}".format(r["f1"]["std"]),
+                "{:.4f}".format(r["f1"]["min"]),
+                "{:.4f}".format(r["f1"]["max"]),
+                "{:.4f}".format(r["f1"]["median"]),
+                r["config"]["model"],
+                r["config"]["num_layers"],
+                r["config"]["rescaled"],
             ])
-    
-    print(f"\n✅ Summary CSV saved: {output_path}")
+
+    print("")
+    print("Summary CSV saved: {}".format(output_path))
 
 
-def print_summary_table(results: List[Dict], model_name: str, lang: str):
-    """Print a formatted summary table to console."""
-    
+def print_summary_table(results: List[Dict], model_name: str, lang: str) -> None:
+    """
+    Print formatted summary table.
+
+    Args:
+        results: List of result dictionaries.
+        model_name: Model name.
+        lang: Language code.
+    """
     results = sorted(results, key=lambda x: x["experiment"])
-    
-    print("\n")
-    print("=" * 80)
-    print(f"BERTSCORE SUMMARY: {model_name} ({lang})")
-    print("=" * 80)
-    print(f"{'Experiment':<25} {'Precision':>12} {'Recall':>12} {'F1':>12} {'Samples':>10}")
-    print("-" * 80)
-    
-    for r in results:
-        print(f"{r['experiment']:<25} "
-              f"{r['precision']['mean']:>12.4f} "
-              f"{r['recall']['mean']:>12.4f} "
-              f"{r['f1']['mean']:>12.4f} "
-              f"{r['num_samples']:>10}")
-    
-    print("=" * 80)
 
+    print("")
+    print("=" * 90)
+    print("BERTScore Summary: {} | Language: {} ({})".format(
+        model_name, lang, SUPPORTED_LANGUAGES.get(lang, "")))
+    print("Model: {} | Layer: {} | Rescaled: {}".format(
+        MODEL_TYPE, NUM_LAYERS, RESCALE_WITH_BASELINE))
+    print("=" * 90)
+    print("{:<30} {:>10} {:>10} {:>10} {:>10} {:>8}".format(
+        "Experiment", "P", "R", "F1", "F1_std", "N"))
+    print("-" * 90)
+
+    for r in results:
+        print("{:<30} {:>10.4f} {:>10.4f} {:>10.4f} {:>10.4f} {:>8}".format(
+            r["experiment"],
+            r["precision"]["mean"],
+            r["recall"]["mean"],
+            r["f1"]["mean"],
+            r["f1"]["std"],
+            r["num_samples"]))
+
+    print("=" * 90)
+
+
+# =============================================================================
+# Main
+# =============================================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Batch BERTScore evaluation from path list"
+        description="Batch BERTScore evaluation for multilingual ASR",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python eval_bertscore.py -i paths_da.txt -m whisper_small -l da
+    python eval_bertscore.py -i paths_nl.txt -m whisper_small -l nl
+    python eval_bertscore.py -i paths_en.txt -m whisper_small -l en
+
+Configuration:
+    Model: xlm-roberta-large
+    Layer: 17 (optimal per BERTScore paper)
+    Rescaling: Disabled (for cross-lingual fairness)
+        """
     )
+
     parser.add_argument(
         "--input_file", "-i",
         type=str,
         required=True,
-        help="Text file with paths to test_examples.jsonl files (one per line)"
+        help="Text file with paths to JSONL files (one per line)"
     )
     parser.add_argument(
         "--model_name", "-m",
         type=str,
         required=True,
-        help="Model name for output organization (e.g., whisper_large)"
+        help="ASR model name for output organization"
     )
     parser.add_argument(
         "--lang", "-l",
         type=str,
         required=True,
-        choices=["da", "nl", "en"],
-        help="Language code: da (Danish), nl (Dutch), en (English)"
+        choices=list(SUPPORTED_LANGUAGES.keys()),
+        help="Language code"
     )
     parser.add_argument(
         "--output_dir", "-o",
         type=str,
         default=".",
-        help="Output directory for bert_scores folder (default: current directory)"
+        help="Output directory (default: current directory)"
     )
     parser.add_argument(
         "--batch_size", "-b",
         type=int,
         default=32,
-        help="Batch size for BERTScore computation (default: 32)"
+        help="Batch size (default: 32)"
     )
-    
+    parser.add_argument(
+        "--rescale",
+        action="store_true",
+        default=False,
+        help="Apply baseline rescaling (default: False)"
+    )
+
     args = parser.parse_args()
-    
-    # Validate input file
+
     if not os.path.isfile(args.input_file):
-        print(f"Error: Input file not found: {args.input_file}")
+        print("Error: Input file not found: {}".format(args.input_file))
         exit(1)
-    
-    # Load paths
-    print(f"\nLoading paths from: {args.input_file}")
+
+    print_configuration(args.lang, args.rescale)
+
+    print("")
+    print("Loading paths from: {}".format(args.input_file))
     paths = load_paths_from_file(args.input_file)
-    
+
     if not paths:
-        print("❌ No paths found in input file!")
+        print("Error: No paths found in input file.")
         exit(1)
-    
-    # Validate paths and extract experiment names
+
     experiments = []
-    print(f"\nFound {len(paths)} paths:")
+    print("")
+    print("Found {} paths:".format(len(paths)))
     for jsonl_path in paths:
         if not os.path.isfile(jsonl_path):
-            print(f"  ⚠️  File not found: {jsonl_path}")
+            print("  [NOT FOUND] {}".format(jsonl_path))
             continue
-        exp_name = extract_exp_name(jsonl_path)
+        exp_name = extract_experiment_name(jsonl_path)
         experiments.append((exp_name, jsonl_path))
-        print(f"  • {exp_name}: {jsonl_path}")
-    
+        print("  [OK] {}".format(exp_name))
+
     if not experiments:
-        print("❌ No valid paths found!")
+        print("Error: No valid paths found.")
         exit(1)
-    
-    # Create output directory
-    output_folder = f"{args.model_name}_{args.lang}"
-    output_dir = os.path.join(args.output_dir, "bert_scores", output_folder)
+
+    output_folder = "{}_{}".format(args.model_name, args.lang)
+    output_dir = os.path.join(args.output_dir, "bertscore_results", output_folder)
     os.makedirs(output_dir, exist_ok=True)
-    print(f"\nOutput directory: {output_dir}")
-    
-    # Process experiments sequentially
+    print("")
+    print("Output directory: {}".format(output_dir))
+
     all_results = []
     for exp_name, jsonl_path in experiments:
         try:
-            result = process_single_experiment(
+            result = process_experiment(
                 jsonl_path,
                 exp_name,
                 args.lang,
                 args.batch_size,
                 output_dir,
+                rescale=args.rescale,
             )
             if result:
                 all_results.append(result)
         except Exception as e:
-            print(f"❌ Error processing {exp_name}: {e}")
-    
+            print("Error processing {}: {}".format(exp_name, e))
+
     if not all_results:
-        print("\n❌ No results collected!")
+        print("Error: No results collected.")
         exit(1)
-    
-    # Create summary CSV
-    summary_path = os.path.join(args.output_dir, "bert_scores", f"summary_{output_folder}.csv")
+
+    summary_path = os.path.join(
+        args.output_dir, "bertscore_results", "summary_{}.csv".format(output_folder))
     create_summary_csv(all_results, summary_path, args.model_name, args.lang)
-    
-    # Print summary table
+
     print_summary_table(all_results, args.model_name, args.lang)
-    
-    print(f"\n✅ Completed! Processed {len(all_results)}/{len(experiments)} experiments.")
-    print(f"   Results: {output_dir}")
-    print(f"   Summary: {summary_path}")
+
+    print("")
+    print("Completed: {}/{} experiments processed.".format(
+        len(all_results), len(experiments)))
+    print("Results directory: {}".format(output_dir))
+    print("Summary file: {}".format(summary_path))
 
 
 if __name__ == "__main__":
