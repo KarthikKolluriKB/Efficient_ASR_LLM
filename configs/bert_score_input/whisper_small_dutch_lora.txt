@@ -1,0 +1,12 @@
+outputs/whisper_small/dutch/LoRA/whisper-s_ablation_1L_lora_final/eval/test_examples.jsonl
+outputs/whisper_small/dutch/LoRA/whisper-s_ablation_2L_lora_final/eval/test_examples.jsonl
+outputs/whisper_small/dutch/LoRA/whisper-s_ablation_3L_lora_final/eval/test_examples.jsonl
+outputs/whisper_small/dutch/LoRA/whisper-s_ablation_5L_lora_final/eval/test_examples.jsonl
+outputs/whisper_small/dutch/LoRA/whisper-s_ablation_4L_lora_final/eval/test_examples.jsonl
+outputs/dutch/whisper-s_ablation_6L_lora/eval/test_examples.jsonl
+outputs/dutch/whisper-s_ablation_7L_lora/eval/test_examples.jsonl
+outputs/dutch/whisper-s_ablation_8L_lora/eval/test_examples.jsonl
+outputs/dutch/whisper-s_ablation_9L_lora/eval/test_examples.jsonl
+outputs/dutch/whisper-s_ablation_10L_lora/eval/test_examples.jsonl
+outputs/dutch/whisper-s_ablation_11L_lora/eval/test_examples.jsonl
+outputs/dutch/whisper-s_baseline_lora/eval/test_examples.jsonl
