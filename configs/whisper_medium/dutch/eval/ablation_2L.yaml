@@ -1,5 +1,5 @@
 # =============================================================================
-# Evaluation Config - Whisper-medium Baseline (4 Layers) 
+# Evaluation Config - Whisper-medium Baseline (2 Layers) 
 # =============================================================================
 # Usage:
 #   python eval.py --config configs/eval_baseline.yaml
@@ -26,7 +26,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 1024              # medium uses 1024
-  encoder_num_layers: 4       # null = all 24 layers (baseline)
+  encoder_num_layers: 2       # null = all 24 layers (baseline)
   
   projector: concatLinear
   projector_ds_rate: 5
@@ -43,7 +43,7 @@ model:
 
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
-  projector_path:  outputs/whisper-medium/dutch/ablation_4L/checkpoint_best_wer.pt
+  projector_path:  outputs/whisper-medium/dutch/ablation_2L/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
   batch_size: 32
@@ -58,7 +58,7 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/whisper-medium/dutch/ablation_4L/eval/
+  output_dir: outputs/whisper-medium/dutch/ablation_2L/eval/
   save_predictions: true
 
 
@@ -70,7 +70,7 @@ train:
   batch_size: 8
   val_batch_size: 8
   num_workers: 4
-  output_dir: outputs/whisper-medium/dutch/ablation_4L/
+  output_dir: outputs/whisper-medium/dutch/ablation_2L/
   freeze_llm: true
   freeze_encoder: true
   mixed_precision: true
@@ -108,6 +108,6 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper_medium_Dutch_ABLATIONS
-  wandb_exp_name: eval_whisper-medium_ablation_4L
+  wandb_exp_name: eval_whisper-medium_ablation_2L
   log_dir: ./logs
-  log_filename: eval_whisper-medium_ablation_4L.log
+  log_filename: eval_whisper-medium_ablation_2L.log
