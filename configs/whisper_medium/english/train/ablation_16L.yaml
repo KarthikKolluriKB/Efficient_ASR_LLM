@@ -1,8 +1,8 @@
 # =============================================================================
-# Experiment: Whisper-medium Baseline (12 Layers)
+# Experiment: Whisper-medium Baseline (16 Layers)
 # =============================================================================
 # Training config for English Common Voice
-# Whisper-medium (12 encoder layers) + Qwen2.5-3B + concatLinear projector
+# Whisper-medium (16 encoder layers) + Qwen2.5-3B + concatLinear projector
 
 # Calculation:
 #   - samples: 80,000
@@ -28,7 +28,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 1024              # medium uses 1024
-  encoder_num_layers: 12         # 12 layers
+  encoder_num_layers: 16         # 16 layers
   
   projector: concatLinear
   projector_ds_rate: 5
@@ -78,7 +78,7 @@ train:
   num_freeze_layers: 0
   
   # Output Configuration
-  output_dir: outputs/english/whisper-medium/ablation_12L/
+  output_dir: outputs/english/whisper-medium/ablation_16L/
   save_model: true
   seed: 42
   
@@ -124,7 +124,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper_medium_English
-  wandb_exp_name: whisper-medium_ablation_12L
+  wandb_exp_name: whisper-medium_ablation_16L
   log_dir: ./logs
-  log_filename: whisper-medium_ablation_12L.log
+  log_filename: whisper-medium_ablation_16L.log
   log_interval: 50
