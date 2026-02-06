@@ -1,8 +1,8 @@
 # =============================================================================
-# Experiment: Whisper-medium Baseline (All 22 Layers) + LoRA
+# Experiment: Whisper-medium Ablation (22 Layers) + LoRA
 # =============================================================================
 # Training config for Dutch Common Voice
-# Whisper-medium (all 22 encoder layers) + Qwen2.5-3B + concatLinear projector
+# Whisper-medium (22 encoder layers) + Qwen2.5-3B + concatLinear projector
 
 # Calculation:
 #   - samples: 40,000
@@ -12,7 +12,7 @@
 #   - total_steps: 5,000 × 6 = 30,000
 #   - warmup_steps: 5% of total = 1,500
 #   - validation_interval: 5% of total_steps = 5% of 30000 = 1500
-# =============================================================================
+# ==============================================================================
 
 model:
   model_name: ASRLLM
@@ -29,7 +29,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 1024              # medium uses 1024
-  encoder_num_layers: 22          # 22 layers for ablation
+  encoder_num_layers: 22         # 22 layers for ablation
   
   projector: concatLinear
   projector_ds_rate: 5
@@ -42,46 +42,59 @@ model:
 train:
   model_name: ASRLLM
   run_validation: true
-
+  
   # Batch Configuration
   batch_size: 8
   val_batch_size: 8
   gradient_accumulation_steps: 1
   num_workers: 4
-  max_eval_batches: 100
-
+  max_eval_batches: 200
+  
   # Generation Configuration
   max_new_tokens: 128
   repetition_penalty: 1.5
-
-   # Training Schedule
-  num_epochs: 6                  
-  total_steps: 30000         
-  warmup_steps: 1500               
-  validation_interval: 1500     
-
-  # Optimizer Configuration   
+  
+  # Training Schedule
+  num_epochs: 6
+  total_steps: 30000
+  warmup_steps: 1500
+  validation_interval: 1500
+  # Optimizer Configuration
   lr: 1.0e-4
-  weight_decay: 0.01              
+  weight_decay: 0.01
   grad_clip: 1.0
-  gamma: 0.85
-
+  lora_lr_multiplier: 1.0         # LoRA LR = lr * multiplier
+  
   # Precision Configuration
   use_fp16: false
   mixed_precision: true
   quantization: false
-
-  # Freeze Configuration
-  freeze_llm: true
-  freeze_encoder: true
-  freeze_layers: false
-  num_freeze_layers: 0
-
+  
+  # ==========================================================================
+  # FREEZING CONFIGURATION - Projector + LoRA
+  # ==========================================================================
+  freeze_encoder: true      # Whisper encoder is frozen
+  freeze_llm: true          # Ignored when use_lora=true (PEFT handles it)
+  use_lora: true            # Enable LoRA on LLM
+  
+  # LoRA Configuration
+  # IMPORTANT: This must be inside the 'train:' section!
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.1
+    target_modules:
+      - q_proj
+      - v_proj
+      - k_proj
+      - o_proj
+  # ==========================================================================
+  
   # Output Configuration
-  output_dir: outputs/whisper-medium/dutch/ablation_22L_lora/
+  output_dir: outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_22L_lora_final/
   save_model: true
   seed: 42
-
+  
   # Other Configuration
   one_gpu: true
   use_peft: true
@@ -98,20 +111,9 @@ scheduler:
 early_stopping: 
   monitor: val/wer            # Monitor validation WER
   mode: min                   # Lower is better
-  patience: 4                # Wait 4 epochs without improvement before stopping
+  patience: 2                # Wait 2 epochs without improvement before stopping
   min_delta: 0.003            # Minimum change to qualify as improvement (0.3% WER)
 
-# LoRA Configuration
-  use_lora: true
-  lora:
-    r: 16
-    alpha: 32 
-    dropout: 0.1
-    target_modules:
-      - q_proj
-      - v_proj
-      - k_proj
-      - o_proj
 
 data:
   dataset: speech_dataset
@@ -136,7 +138,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper_medium_Dutch_ABLATIONS_LoRA
-  wandb_exp_name: whisper-medium_ablation_22L_lora
+  wandb_exp_name: whisper-medium_ablation_22L_lora_final
   log_dir: ./logs
-  log_filename: whisper-medium_ablation_22L_lora.log
-  log_interval: 50
+  log_filename: whisper-medium_ablation_22L_lora_final.log
+  log_interval: 100
