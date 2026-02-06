@@ -58,7 +58,7 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/whisper-medium/dutch/ablation_20L_lora/eval/
+  output_dir: outputs/whisper-medium/dutch/ablation_20L_lora/eval_f/
   save_predictions: true
 
 
@@ -76,7 +76,7 @@ train:
   mixed_precision: true
   quantization: false
   one_gpu: true
-  use_peft: false
+  use_peft: true
 
   # LoRA Configuration
   use_lora: true
@@ -120,6 +120,6 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper_medium_Dutch_ABLATIONS_LoRA
-  wandb_exp_name: eval_whisper-medium_ablation_20L_lora
+  wandb_exp_name: eval_whisper-medium_ablation_20L_lora_f
   log_dir: ./logs
-  log_filename: eval_whisper-medium_ablation_20L_lora.log
+  log_filename: eval_whisper-medium_ablation_20L_lora_f.log
