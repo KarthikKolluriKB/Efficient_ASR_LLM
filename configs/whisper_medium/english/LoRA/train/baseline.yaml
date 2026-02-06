@@ -19,19 +19,22 @@ model:
   model_name: ASRLLM
   file: models/model.py:ASRLLM
   
+  # LLM Configuration
   llm_model_name: qwen2.5-3B
   llm_model: Qwen/Qwen2.5-3B
   llm_dim: 2048
   llm_model_path: null
   llm_type: decoder_only
   
+  # Encoder Configuration
   encoder_model_name: whisper-medium
   encoder_model: medium
   encoder_ds_rate: 2
   encoder_model_path: null
-  encoder_dim: 1024              # medium uses 1024
-  encoder_num_layers: null       # null = all 24 layers (baseline)
+  encoder_dim: 1024
+  encoder_num_layers: null        # null = all 24 layers
   
+  # Projector Configuration
   projector: concatLinear
   projector_ds_rate: 5
   projector_hidden_dim: 2048
@@ -43,46 +46,46 @@ model:
 train:
   model_name: ASRLLM
   run_validation: true
-
+  
   # Batch Configuration
   batch_size: 8
   val_batch_size: 8
   gradient_accumulation_steps: 1
   num_workers: 4
-  max_eval_batches: 100
-
+  max_eval_batches: 200
+  
   # Generation Configuration
   max_new_tokens: 128
   repetition_penalty: 1.5
-
-   # Training Schedule
-  num_epochs: 4                  
-  total_steps: 29072        
-  warmup_steps: 1454               
-  validation_interval: 363     
-
-  # Optimizer Configuration   
+  
+  # Training Schedule
+  num_epochs: 4
+  total_steps: 29072
+  warmup_steps: 1454
+  validation_interval: 363
+  
+  # Optimizer Configuration
   lr: 1.0e-4
-  weight_decay: 0.01              
+  weight_decay: 0.01
   grad_clip: 1.0
   gamma: 0.85
-
+  
   # Precision Configuration
   use_fp16: false
   mixed_precision: true
   quantization: false
-
-  # Freeze Configuration
+  
+  # Freezing Configuration (Projector-Only Training)
   freeze_llm: true
   freeze_encoder: true
   freeze_layers: false
   num_freeze_layers: 0
-
+  
   # Output Configuration
-  output_dir: outputs/whisper-medium/english/baseline_lora/
+  output_dir: outputs/english/whisper-medium/baseline_lora/
   save_model: true
   seed: 42
-
+  
   # Other Configuration
   one_gpu: true
   use_peft: true
@@ -90,29 +93,30 @@ train:
   batching_strategy: packing
   context_length: 384
 
-scheduler: 
-  name: cosine_with_warmup
-  total_training_steps: 29072
-  warmup_steps: 1454
-  min_lr_ratio: 0.1
-
-early_stopping: 
-  monitor: val/wer            # Monitor validation WER
-  mode: min                   # Lower is better
-  patience: 4                # Wait 4 epochs without improvement before stopping
-  min_delta: 0.003            # Minimum change to qualify as improvement (0.3% WER)
-
-# LoRA Configuration
+  # LoRA Configuration
   use_lora: true
   lora:
     r: 16
-    alpha: 32 
+    alpha: 32
     dropout: 0.1
     target_modules:
       - q_proj
       - v_proj
       - k_proj
       - o_proj
+
+
+scheduler:
+  name: cosine_with_warmup
+  total_training_steps: 29072
+  warmup_steps: 1454
+  min_lr_ratio: 0.1
+
+early_stopping:
+  monitor: val/wer
+  mode: min
+  patience: 4
+  min_delta: 0.003
 
 data:
   dataset: speech_dataset
@@ -123,11 +127,11 @@ data:
   test_split: test
   use_raw_transcription: false
   input_type: mel
-  mel_size: 80                    
+  mel_size: 80
   normalize: false
   projector_ds_rate: 5
   use_variable_length: true
-  max_audio_length: 30            
+  max_audio_length: 30
   fix_length_audio: -1
   max_target_chars: 500
   inference_mode: false
@@ -137,7 +141,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper_medium_English_ABLATIONS_LoRA
-  wandb_exp_name: whisper-medium_baseline_lora
+  wandb_exp_name: whisper-medium_english_baseline_lora
   log_dir: ./logs
-  log_filename: whisper-medium_baseline_lora.log
-  log_interval: 50
+  log_filename: whisper-medium_english_baseline_lora.log
+  log_interval: 100
