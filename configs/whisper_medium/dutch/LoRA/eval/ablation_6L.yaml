@@ -26,7 +26,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 1024              # medium uses 1024
-  encoder_num_layers: 6       # null = all 24 layers (baseline)
+  encoder_num_layers: 6         # 6 layers (ablation)
   
   projector: concatLinear
   projector_ds_rate: 5
@@ -43,7 +43,7 @@ model:
 
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
-  projector_path:  outputs/whisper-medium/dutch/ablation_6L_lora/checkpoint_best_wer.pt
+  projector_path: outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_6L_lora_final/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
   batch_size: 32
@@ -58,7 +58,7 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/whisper-medium/dutch/ablation_6L_lora/eval/
+  output_dir: outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_6L_lora_final/eval_f/
   save_predictions: true
 
 
@@ -70,13 +70,13 @@ train:
   batch_size: 8
   val_batch_size: 8
   num_workers: 4
-  output_dir: outputs/whisper-medium/dutch/ablation_6L_lora/
+  output_dir: outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_6L_lora_final/
   freeze_llm: true
   freeze_encoder: true
   mixed_precision: true
   quantization: false
   one_gpu: true
-  use_peft: false
+  use_peft: true
 
   # LoRA Configuration
   use_lora: true
@@ -120,6 +120,6 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper_medium_Dutch_ABLATIONS_LoRA
-  wandb_exp_name: eval_whisper-medium_ablation_6L_lora
+  wandb_exp_name: whisper-medium_ablation_6L_lora_f
   log_dir: ./logs
-  log_filename: eval_whisper-medium_ablation_6L_lora.log
+  log_filename: whisper-medium_ablation_6L_lora_f.log
