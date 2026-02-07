@@ -2,7 +2,7 @@
 # English Common Voice Training Configuration (Projector-Only) + LoRA
 # =============================================================================
 # Training config for English Common Voice (~100 hours, ~58,140 samples)
-# Whisper-medium (18 encoder layers) + Qwen2.5-3B + concatLinear projector
+# Whisper-medium (6 encoder layers) + Qwen2.5-3B + concatLinear projector
 # Only projector is trained (freeze_llm=true, freeze_encoder=true)
 #
 # Calculation: (rounding steps to nearest 0.5 for convenience)
@@ -32,7 +32,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 1024
-  encoder_num_layers: 18        # null = all 24 layers
+  encoder_num_layers: 6        # null = all 24 layers
   
   # Projector Configuration
   projector: concatLinear
@@ -82,7 +82,7 @@ train:
   num_freeze_layers: 0
   
   # Output Configuration
-  output_dir: outputs/english/whisper-medium/ablation_18L_lora/
+  output_dir: outputs/english/whisper-medium/ablation_6L_lora/
   save_model: true
   seed: 42
   
@@ -141,7 +141,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper_medium_English_ABLATIONS_LoRA
-  wandb_exp_name: whisper-medium_english_ablation_18L_lora
+  wandb_exp_name: whisper-medium_english_ablation_6L_lora
   log_dir: ./logs
-  log_filename: whisper-medium_english_ablation_18L_lora.log
+  log_filename: whisper-medium_english_ablation_6L_lora.log
   log_interval: 100
