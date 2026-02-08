@@ -44,7 +44,7 @@ model:
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
   # NOTE: LoRA checkpoints are named checkpoint_best_wer.pt (not projector_best_wer.pt)
-  projector_path: outputs/english/whisper-medium/ablation_14L/checkpoint_best_wer.pt
+  projector_path: outputs/english/whisper-medium/ablation_14L_lora/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
   batch_size: 32
@@ -59,7 +59,7 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/english/whisper-medium/ablation_14L/eval/
+  output_dir: outputs/english/whisper-medium/ablation_14L_lora/eval/
   save_predictions: true
 
 # -----------------------------------------------------------------------------
@@ -70,7 +70,7 @@ train:
   batch_size: 8
   val_batch_size: 8
   num_workers: 4
-  output_dir: outputs/english/whisper-medium/ablation_14L/
+  output_dir: outputs/english/whisper-medium/ablation_14L_lora/
   freeze_llm: true              
   freeze_encoder: true
   mixed_precision: true
@@ -119,6 +119,6 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper_medium_English_ABLATIONS_LoRA
-  wandb_exp_name: whisper-medium_english_ablation_14L
+  wandb_exp_name: whisper-medium_english_ablation_14L_lora
   log_dir: ./logs
-  log_filename: eval_ablation_14L.log
+  log_filename: eval_ablation_14L_lora.log
