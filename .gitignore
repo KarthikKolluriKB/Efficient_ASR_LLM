@@ -22,3 +22,5 @@ outputs/
 .env
 
 notebooks/ 
+
+todo.md
