@@ -1,0 +1,12 @@
+outputs/whisper-medium/danish/ablation_10L/eval_results/test_examples.jsonl
+outputs/danish/whisper-medium_ablation_12L/eval/test_examples.jsonl
+outputs/whisper-medium/danish/ablation_14L/eval_results/test_examples.jsonl
+outputs/whisper-medium/danish/ablation_16L/eval_results/test_examples.jsonl
+outputs/whisper-medium/danish/ablation_18L/eval_results/test_examples.jsonl
+outputs/whisper-medium/danish/ablation_20L/eval_results/test_examples.jsonl
+outputs/whisper-medium/danish/ablation_22L/eval_results/test_examples.jsonl
+outputs/whisper-medium/danish/ablation_2L/eval_results/test_examples.jsonl
+outputs/danish/whisper-medium_ablation_4L/eval/test_examples.jsonl
+outputs/danish/whisper-medium_ablation_6L/eval/test_examples.jsonl
+outputs/whisper-medium/danish/ablation_8L/eval_results/test_examples.jsonl
+outputs/danish/whisper-medium_baseline/eval/test_examples.jsonl
