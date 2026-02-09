@@ -1,10 +1,10 @@
 # =============================================================================
-# Evaluation Config - Whisper-large-v2 24 Layers (All) + LoRA
+# Evaluation Config - Whisper-large-v2 16 Layers (All) + LoRA
 # =============================================================================
 # Usage:
-#   python eval.py --config configs/whisper_largev2/danish/LoRA/eval/Ablation_24L.yaml
-#   python eval.py --config configs/whisper_largev2/danish/LoRA/eval/Ablation_24L.yaml --num_beams 2
-#   python eval.py --config configs/whisper_largev2/danish/LoRA/eval/Ablation_24L.yaml --ckpt_path path/to/checkpoint.pt
+#   python eval.py --config configs/whisper_largev2/danish/LoRA/eval/Ablation_16L.yaml
+#   python eval.py --config configs/whisper_largev2/danish/LoRA/eval/Ablation_16L.yaml --num_beams 2
+#   python eval.py --config configs/whisper_largev2/danish/LoRA/eval/Ablation_16L.yaml --ckpt_path path/to/checkpoint.pt
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -27,7 +27,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 1280
-  encoder_num_layers: 24      
+  encoder_num_layers: 16      
   
   # Projector Configuration
   projector: concatLinear
@@ -43,7 +43,7 @@ model:
 # -----------------------------------------------------------------------------
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
-  projector_path: outputs/whisper_largev2/danish/ablation_24L_Big_LoRA/checkpoint_best_wer.pt
+  projector_path: outputs/whisper_largev2/danish/ablation_16L_LoRA/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
   batch_size: 32
@@ -58,7 +58,7 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/whisper_largev2/danish/ablation_24L_Big_LoRA/eval/
+  output_dir: outputs/whisper_largev2/danish/ablation_16L_LoRA/eval/
   save_predictions: true
 
 # -----------------------------------------------------------------------------
@@ -69,7 +69,7 @@ train:
   batch_size: 8
   val_batch_size: 8
   num_workers: 4
-  output_dir: outputs/whisper_largev2/danish/ablation_24L_Big_LoRA/
+  output_dir: outputs/whisper_largev2/danish/ablation_16L_LoRA/
   freeze_llm: true
   freeze_encoder: true
   mixed_precision: true
@@ -79,8 +79,8 @@ train:
 
   use_lora: true
   lora:
-    r: 16                    
-    alpha: 32               
+    r: 8                    
+    alpha: 16               
     dropout: 0.1            
     target_modules:         
       - q_proj
@@ -117,6 +117,6 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper-largev2_Danish
-  wandb_exp_name: ablation_24L_Big_LoRA
+  wandb_exp_name: ablation_16L_LoRA
   log_dir: ./logs
-  log_filename: ablation_24L_Big_LoRA.log
+  log_filename: ablation_16L_LoRA.log
