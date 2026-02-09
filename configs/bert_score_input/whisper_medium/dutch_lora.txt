@@ -1,0 +1,12 @@
+outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_10L_lora_final/eval_f/test_examples.jsonl
+outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_12L_lora_final/eval_f/test_examples.jsonl
+outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_14L_lora_final/eval_f/test_examples.jsonl
+outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_16L_lora_final/eval_f/test_examples.jsonl
+outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_18L_lora_final/eval_f/test_examples.jsonl
+outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_20L_lora_final/eval_f/test_examples.jsonl
+outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_22L_lora_final/eval_f/test_examples.jsonl
+outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_2L_lora_final/eval_f/test_examples.jsonl
+outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_4L_lora_final/eval_f/test_examples.jsonl
+outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_6L_lora_final/eval_f/test_examples.jsonl
+outputs/whisper_medium/dutch/LoRA/whisper-medium_ablation_8L_lora_final/eval_f/test_examples.jsonl
+outputs/whisper_medium/dutch/LoRA/whisper-medium_baseline_lora_final/eval_f/test_examples.jsonl

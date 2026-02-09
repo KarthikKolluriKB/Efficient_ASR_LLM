@@ -1,0 +1,12 @@
+outputs/whisper-medium/dutch/ablation_10L/eval/test_examples.jsonl
+outputs/whisper-medium/dutch/ablation_12L/eval/test_examples.jsonl
+outputs/whisper-medium/dutch/ablation_14L/eval/test_examples.jsonl
+outputs/whisper-medium/dutch/ablation_16L/eval/test_examples.jsonl
+outputs/whisper-medium/dutch/ablation_18L/eval/test_examples.jsonl
+outputs/whisper-medium/dutch/ablation_20L/eval/test_examples.jsonl
+outputs/whisper-medium/dutch/ablation_22L/eval/test_examples.jsonl
+outputs/whisper-medium/dutch/ablation_2L/eval/test_examples.jsonl
+outputs/whisper-medium/dutch/ablation_4L/eval/test_examples.jsonl
+outputs/whisper-medium/dutch/ablation_6L/eval/test_examples.jsonl
+outputs/whisper-medium/dutch/ablation_8L/eval/test_examples.jsonl
+outputs/whisper-medium/dutch/baseline/eval/test_examples.jsonl
