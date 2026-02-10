@@ -1,8 +1,8 @@
 # =============================================================================
-# Experiment 1: Baseline - Whisper-large-v2 32 Layers (All) + LoRA
+# Experiment 1: Baseline - Whisper-large-v2 18 Layers + LoRA
 # =============================================================================
 # Training config for Dutch Common Voice
-# Whisper-large-v2 (all 32 encoder layers) + Qwen2.5-3B + concatLinear projector
+# Whisper-large-v2 (18 encoder layers) + Qwen2.5-3B + concatLinear projector
 # Calculation:
 #   - samples: 40,000
 #   - batch_size: 8
@@ -29,7 +29,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 1280
-  encoder_num_layers: null      # null = all layers
+  encoder_num_layers: 18      # null = all layers
   
   # Projector Configuration
   projector: concatLinear
@@ -80,8 +80,8 @@ train:
   use_lora: true           # LoRA enabled
 
   lora:
-    r: 32                   # LoRA rank (higher = more params, more capacity)
-    alpha: 64               # LoRA alpha (scaling factor, typically 2*r)
+    r: 16                   # LoRA rank (higher = more params, more capacity)
+    alpha: 32               # LoRA alpha (scaling factor, typically 2*r)
     dropout: 0.1            # LoRA dropout for regularization
     target_modules:         # Which layers to apply LoRA to
       - q_proj
@@ -91,7 +91,7 @@ train:
   # ==========================================================================
   
   # Output Configuration
-  output_dir: outputs/whisper_largev2/dutch/baseline_LoRA_Big/
+  output_dir: outputs/whisper_largev2/dutch/baseline_LoRA_18L/
   save_model: true
   seed: 42
   
@@ -137,7 +137,7 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper-largev2_Dutch
-  wandb_exp_name: whisper-largev2_baseline_LoRA_Big
+  wandb_exp_name: whisper-largev2_baseline_LoRA_18L
   log_dir: ./logs
-  log_filename: whisper-largev2_baseline_LoRA_Big.log
+  log_filename: whisper-largev2_baseline_LoRA_18L.log
   log_interval: 100
