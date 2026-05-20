@@ -15,9 +15,9 @@ Either `git pull` the latest branch, or copy these directories from the
 laptop to the server:
 
 ```
-experiments/bias_pruning/         # all the new scripts + README
-configs/whisper_medium/english/eval/baseline.yaml
-configs/whisper_medium/english/eval/ablation_22L.yaml
+experiments/bias_pruning/                             # all the new scripts + README
+configs/whisper_largev2/english/eval/baseline.yaml    # 32 layers (unpruned)
+configs/whisper_largev2/english/eval/ablation_30L.yaml # 30 layers (= 2L pruned)
 ```
 
 Everything else this experiment touches already lives in the project
@@ -31,8 +31,8 @@ Everything else this experiment touches already lives in the project
    on the command line to override):
 
    ```
-   outputs/english/whisper-medium/baseline/checkpoint_best_wer.pt
-   outputs/english/whisper-medium/ablation_22L/checkpoint_best_wer.pt
+   outputs/english/whisper-largev2/baseline/checkpoint_best_wer.pt
+   outputs/english/whisper-largev2/ablation_30L/checkpoint_best_wer.pt
    ```
 
 2. The preprocessed English HuggingFace dataset at `data/cv22_hf/en` with a
@@ -74,16 +74,16 @@ configs; ~1–3 h per condition on a single GPU at the CV22-en test size
 (16,396 utterances after filtering).
 
 ```bash
-# Unpruned baseline (24 layers, seed 42)
-python experiments/bias_pruning/scripts/evaluate_subgroup_wer.py \
-    --config configs/whisper_medium/english/eval/baseline.yaml \
-    --checkpoint_path outputs/english/whisper-medium/baseline/checkpoint_best_wer.pt \
+# Unpruned baseline (32 layers, seed 42)
+CUDA_VISIBLE_DEVICES=1 python experiments/bias_pruning/scripts/evaluate_subgroup_wer.py \
+    --config configs/whisper_largev2/english/eval/baseline.yaml \
+    --checkpoint_path outputs/english/whisper-largev2/baseline/checkpoint_best_wer.pt \
     --prune_depth 0 --seed 42 --condition unpruned
 
-# 2L pruned (22 layers kept, seed 42)
-python experiments/bias_pruning/scripts/evaluate_subgroup_wer.py \
-    --config configs/whisper_medium/english/eval/ablation_22L.yaml \
-    --checkpoint_path outputs/english/whisper-medium/ablation_22L/checkpoint_best_wer.pt \
+# 2L pruned (30 of 32 layers kept, seed 42)
+CUDA_VISIBLE_DEVICES=1 python experiments/bias_pruning/scripts/evaluate_subgroup_wer.py \
+    --config configs/whisper_largev2/english/eval/ablation_30L.yaml \
+    --checkpoint_path outputs/english/whisper-largev2/ablation_30L/checkpoint_best_wer.pt \
     --prune_depth 2 --seed 42 --condition pruned_2L
 ```
 
@@ -166,6 +166,7 @@ significance signal that actually matters.
 
 ## Reminder: naming convention
 
-`ablation_22L` (the repo's existing name) = "2L pruned" in this experiment
-= 22 of 24 encoder layers kept. The repo also has an `ablation_2L` config,
-which keeps only 2 layers — **not** what this experiment wants.
+`whisper-largev2/ablation_30L` = "2L pruned" in this experiment = 30 of 32
+encoder layers kept. The repo also has `ablation_2L`/`ablation_4L`/etc.
+configs that keep *only* that many layers — those are **not** the same as
+"2L/4L pruned" and should not be used for this experiment.

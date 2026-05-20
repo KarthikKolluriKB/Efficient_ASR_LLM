@@ -1,10 +1,10 @@
 # Experiment 1 — Encoder Pruning and Gender Bias
 
-Does removing the top 2 encoder layers from Whisper-Medium (a depth where
+Does removing the top 2 encoder layers from Whisper-large-v2 (a depth where
 aggregate WER was shown to be preserved in paper 1) also preserve WER
 **equally across gender subgroups**, or does bias hide under the aggregate?
 
-Models: Whisper-Medium encoder + ConcatLinear projector + Qwen2.5-3B LLM
+Models: Whisper-large-v2 encoder + ConcatLinear projector + Qwen2.5-3B LLM
 (checkpoints from the prior paper; no training in this experiment).
 Data: CommonVoice 22, English split.
 
@@ -12,17 +12,18 @@ Data: CommonVoice 22, English split.
 
 ## Layer-count vocabulary (READ THIS FIRST)
 
-Whisper-Medium has 24 encoder layers. There are two naming conventions in
-this repo that mean *opposite things*.
+Whisper-large-v2 has 32 encoder layers. There are two naming conventions
+in this repo that mean *opposite things* — be careful with config files.
 
-| Spec wording (this experiment) | Repo config name        | Layers kept | Layers pruned (top-down) |
-|--------------------------------|-------------------------|------------:|-------------------------:|
-| `unpruned` baseline            | `baseline`              |          24 |                        0 |
-| `2L pruned` (target condition) | `ablation_22L`          |          22 |                        2 |
+| Spec wording (this experiment) | Repo config name              | Layers kept | Layers pruned (top-down) |
+|--------------------------------|-------------------------------|------------:|-------------------------:|
+| `unpruned` baseline            | `whisper_largev2 baseline`    |          32 |                        0 |
+| `2L pruned` (target condition) | `whisper_largev2 ablation_30L`|          30 |                        2 |
 
-The repo's `ablation_2L.yaml` is **not** "2L pruned" — it keeps only 2 layers
-(prunes 22). Whenever this experiment says "2L pruned" it means the
-`ablation_22L` checkpoint, which keeps 22 layers.
+For reference, the equivalent for whisper-medium (24 layers) would be
+`baseline` vs `ablation_22L`. The repo also has `ablation_2L`/`ablation_4L`
+etc. which keep *only* that many layers — those are **not** the same as
+"2L/4L pruned" in this experiment's vocabulary.
 
 ---
 
@@ -31,13 +32,12 @@ The repo's `ablation_2L.yaml` is **not** "2L pruned" — it keeps only 2 layers
 These items live outside this folder and must be present before the
 evaluation step runs. None are required to build the descriptive table.
 
-1. **Paper 1 checkpoints (English, Whisper-Medium):**
-   - Unpruned: `outputs/english/whisper-medium/baseline/checkpoint_best_wer.pt`
-   - 2L pruned: `outputs/english/whisper-medium/ablation_22L/checkpoint_best_wer.pt`
-   - If multiple seeds exist they should follow a parallel directory pattern
-     such as `outputs/english/whisper-medium/baseline_seed{N}/checkpoint_best_wer.pt`.
-     If only one seed exists (the configs ship with `seed: 42`), the per-seed
-     SD across seeds is undefined; this is noted as a limitation.
+1. **Paper 1 checkpoints (English, Whisper-large-v2):**
+   - Unpruned: `outputs/english/whisper-largev2/baseline/checkpoint_best_wer.pt`
+   - 2L pruned: `outputs/english/whisper-largev2/ablation_30L/checkpoint_best_wer.pt`
+   - Configs ship with `seed: 42` only. With a single seed, the per-seed SD
+     across seeds is undefined; this is noted as a limitation and the paired
+     bootstrap test is the meaningful significance signal.
 
 2. **Preprocessed HuggingFace test split:**
    - Path: `data/cv22_hf/en` (built by `python -m datamodule.hf_data --language en`)
@@ -97,19 +97,15 @@ python experiments/bias_pruning/scripts/bootstrap_ci.py --self_test
 
 # Step 5 — per-seed evaluation (one call per checkpoint, per condition)
 python experiments/bias_pruning/scripts/evaluate_subgroup_wer.py \
-    --config configs/whisper_medium/english/eval/baseline.yaml \
-    --checkpoint_path outputs/english/whisper-medium/baseline/checkpoint_best_wer.pt \
+    --config configs/whisper_largev2/english/eval/baseline.yaml \
+    --checkpoint_path outputs/english/whisper-largev2/baseline/checkpoint_best_wer.pt \
     --prune_depth 0 --seed 42 --condition unpruned
 
 python experiments/bias_pruning/scripts/evaluate_subgroup_wer.py \
-    --config configs/whisper_medium/english/eval/ablation_22L.yaml \
-    --checkpoint_path outputs/english/whisper-medium/ablation_22L/checkpoint_best_wer.pt \
+    --config configs/whisper_largev2/english/eval/ablation_30L.yaml \
+    --checkpoint_path outputs/english/whisper-largev2/ablation_30L/checkpoint_best_wer.pt \
     --prune_depth 2 --seed 42 --condition pruned_2L
 
 # Step 6 — comparison
 python experiments/bias_pruning/scripts/compare_conditions.py
 ```
-
-Note: `configs/whisper_medium/english/eval/ablation_22L.yaml` does not yet
-exist in the repo. Copy `baseline.yaml`, set `encoder_num_layers: 22`, and
-point `eval.projector_path` to the 22L checkpoint.
