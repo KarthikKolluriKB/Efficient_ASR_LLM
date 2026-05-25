@@ -25,14 +25,19 @@ notebooks/
 
 todo.md
 
-# License-restricted dataset artefacts. Meta Fair-Speech, CORAAL, and
-# L2-ARCTIC forbid redistribution of any part of the dataset, including
-# reference transcripts that would end up in per-utterance CSVs. EdAcc
-# is CC-BY-SA so technically redistributable with attribution, but kept
-# out of git by default for size. CommonVoice (CC-0) and Artie Bias
-# (CC-0) per-utterance CSVs are fine and can be committed.
-experiments/bias_pruning/results/per_utterance/*fairspeech*
-experiments/bias_pruning/results/per_utterance/*fair_speech*
-experiments/bias_pruning/results/per_utterance/*coraal*
-experiments/bias_pruning/results/per_utterance/*l2arctic*
-experiments/bias_pruning/results/per_utterance/*edacc*
+# Server-generated experiment outputs. These are reproducible from the
+# checkpoint + test split via experiments/bias_pruning/scripts/evaluate_subgroup_wer.py,
+# so keeping them out of git avoids merge conflicts when a server run
+# overwrites the laptop's copies. The directories themselves are kept via
+# .gitkeep so `compare_conditions.py` has somewhere to drop new outputs.
+experiments/bias_pruning/results/per_utterance/*.csv
+experiments/bias_pruning/results/per_seed_wer/*.csv
+!experiments/bias_pruning/results/per_utterance/.gitkeep
+!experiments/bias_pruning/results/per_seed_wer/.gitkeep
+
+# Comparison-level outputs ARE committed (final_comparison.csv,
+# disparity_metrics.csv, paired_bootstrap.csv, comparison_plot.png) —
+# those are the human-readable results referenced in summary.md.
+# Restricted-license datasets (Fair-Speech etc.) must never have their
+# transcripts redistributed. The general per_utterance/*.csv rule above
+# already blocks them.
