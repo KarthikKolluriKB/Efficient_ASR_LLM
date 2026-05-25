@@ -89,18 +89,37 @@ python experiments/bias_pruning/data_external/download_coraal.py --all
   EAF / TXT files. Plan ~3–5 days of data engineering before CORAAL is
   usable for the bias pipeline.
 
-## Fair-Speech
+## Fair-Speech (Meta ASR Fairness Evaluation Dataset)
+
+Meta releases this via a click-to-accept download page — two files
+(`asr_fairness_audio.zip`, ~4.1 GB; `asr_fairness_metadata.tsv`).
+There's no scriptable download; do the browser step once, then:
 
 ```bash
-python experiments/bias_pruning/data_external/download_fairspeech.py
+python experiments/bias_pruning/data_external/download_fairspeech.py \
+    --zip_path ~/Downloads/asr_fairness_audio.zip \
+    --metadata_path ~/Downloads/asr_fairness_metadata.tsv
 ```
 
-- Paper: [arXiv 2408.12734](https://arxiv.org/abs/2408.12734).
-- **No public download URL was found via web search.** The script prints
-  three places to look (HF Hub `facebook/...`, github.com/facebookresearch,
-  email the corresponding author Irina-Elena Veliche).
-- Once you have a URL or HF repo handle, pass it via `--source_url` /
-  `--source_hf` or edit `FAIR_SPEECH_SOURCE` in the script.
+The script stages both files under `data/fairspeech/`, extracts the
+audio, and prints the license reminder below.
+
+**License restrictions — important.** Meta's terms forbid redistribution
+of any part of the dataset, including reference transcripts:
+
+| Action | Allowed? |
+|---|:---:|
+| Use to evaluate ASR fairness (this experiment) | ✅ explicit Purpose |
+| Keep raw audio / metadata under `data/` (gitignored) | ✅ stays local |
+| Publish summary-level results (per-gender WER, p-values) | ✅ derivative IP we own |
+| Commit per-utterance CSV containing this dataset's text | ❌ blocked by `.gitignore` pattern `*fairspeech*` |
+| Train a model that predicts race / ethnicity / gender of individuals | ❌ forbidden |
+| Redistribute audio / metadata to a third party | ❌ forbidden |
+| Re-identify any individual | ❌ forbidden |
+
+- 30,000 utterances, 602 US speakers, avg 7.36 s per clip (~62 h total)
+- Demographics: age, gender, ethnicity, geographic location, native-English
+- Paper: [arXiv 2408.12734](https://arxiv.org/abs/2408.12734)
 
 ---
 

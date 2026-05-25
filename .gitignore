@@ -21,6 +21,18 @@ outputs/
 
 .env
 
-notebooks/ 
+notebooks/
 
 todo.md
+
+# License-restricted dataset artefacts. Meta Fair-Speech, CORAAL, and
+# L2-ARCTIC forbid redistribution of any part of the dataset, including
+# reference transcripts that would end up in per-utterance CSVs. EdAcc
+# is CC-BY-SA so technically redistributable with attribution, but kept
+# out of git by default for size. CommonVoice (CC-0) and Artie Bias
+# (CC-0) per-utterance CSVs are fine and can be committed.
+experiments/bias_pruning/results/per_utterance/*fairspeech*
+experiments/bias_pruning/results/per_utterance/*fair_speech*
+experiments/bias_pruning/results/per_utterance/*coraal*
+experiments/bias_pruning/results/per_utterance/*l2arctic*
+experiments/bias_pruning/results/per_utterance/*edacc*
