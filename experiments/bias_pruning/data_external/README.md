@@ -16,7 +16,7 @@ on a scratch disk).
 |---|---|:---:|---:|---|---|
 | [EdAcc](#edacc) | `download_edacc.py` | ✅ fully | ~6.95 GB | CC-BY-SA | accent (25), L1 (29), gender (3) |
 | [L2-ARCTIC](#l2-arctic) | `download_l2arctic.py` | ✅ after HF login | ~473 MB | CC-BY-NC | L1 (6), native vs non-native |
-| [Artie Bias](#artie-bias-corpus) | `download_artie.py` | ⚠️ TSV auto, audio manual | ~50 MB tsv + audio | CC-0 | gender, age, accent (balanced) |
+| [Artie Bias](#artie-bias-corpus) | `download_artie.py` | ✅ direct tarball (audio + TSV) | ~few hundred MB | CC-0 | gender, age, accent (balanced) |
 | [CORAAL](#coraal) | `download_coraal.py` | ✅ direct URLs | tens of GB total | CC BY-NC-SA | regional AAL, age, sex, education |
 | [Fair-Speech](#fair-speech) | `download_fairspeech.py` | ❌ no public URL surfaced | unknown | TBD | gender, age, ethnicity, geo, native flag |
 
@@ -52,19 +52,21 @@ python experiments/bias_pruning/data_external/download_l2arctic.py
 python experiments/bias_pruning/data_external/download_artie.py
 ```
 
-Two-step process — the script handles step 1 and prints step 2 instructions:
+- **Direct tarball** at `http://ml-corpora.artie.com/artie-bias-corpus.tar.gz`
+  contains both the TSV (`client_id, path, sentence, up_votes, down_votes,
+  age, gender, accent`) and the matching MP3 clips bundled together —
+  no need to wrangle a Mozilla CV release.
+- The script downloads + extracts everything into `data/artie_bias/`.
+- 1,712 clips, ~2.4 h, 17 distinct English accents, CC-0 licensed.
 
-1. **Auto:** clones the [artie-inc/artie-bias-corpus](https://github.com/artie-inc/artie-bias-corpus)
-   GitHub repo to get the TSV with 1,712 (path, demographic) rows.
-2. **Manual:** Mozilla switched CV downloads to the [Mozilla Data
-   Collective](https://commonvoice.mozilla.org/en/datasets) in October 2025,
-   so the matching CV June-2019 English MP3 clips have to be obtained
-   separately (Mozilla account, accept terms, download the relevant
-   release). Put each clip under `data/artie_bias/clips/<path>` matching
-   the TSV's `path` column.
-
-If you already have a local mirror of CV June 2019 from previous work,
-skip step 2 and symlink the `clips/` directory.
+Fallback path (if the Artie CDN is down):
+```bash
+python experiments/bias_pruning/data_external/download_artie.py --tsv_only
+```
+That clones only the [GitHub repo](https://github.com/artie-inc/artie-bias-corpus)
+for the TSV and bias-detection scripts. You then have to source the MP3s
+yourself (Mozilla CV June 2019, available via the Mozilla Data Collective
+since Oct 2025).
 
 ## CORAAL
 
