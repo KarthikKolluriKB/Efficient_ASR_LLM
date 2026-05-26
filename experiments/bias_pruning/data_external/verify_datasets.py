@@ -56,12 +56,43 @@ def _du(path: Path) -> str:
 
 def _truncate_value(v, max_len: int = 80) -> str:
     """Print-friendly truncation. Hide raw audio arrays."""
-    if isinstance(v, dict) and "array" in v:
-        n = len(v["array"]) if v.get("array") is not None else 0
-        sr = v.get("sampling_rate", "?")
-        return f"<audio: {n} samples @ {sr} Hz>"
+    if isinstance(v, dict):
+        if "array" in v:
+            n = len(v["array"]) if v.get("array") is not None else 0
+            sr = v.get("sampling_rate", "?")
+            return f"<audio: {n} samples @ {sr} Hz>"
+        if "bytes" in v or "path" in v:
+            # decode=False form: dict with `bytes` and/or `path`
+            path = v.get("path")
+            nbytes = len(v["bytes"]) if v.get("bytes") is not None else 0
+            return f"<audio (undecoded): path={path!r}, bytes={nbytes}>"
     s = repr(v)
     return s if len(s) <= max_len else s[:max_len - 3] + "..."
+
+
+def _disable_audio_decoding(ds):
+    """Cast every Audio column to decode=False so row access doesn't pull torchcodec.
+
+    Works on a single Dataset or a DatasetDict. Returns the (possibly modified) object.
+    The verifier doesn't need decoded audio — it just needs to confirm the row schema.
+    Downstream HF-dataset builders will decode at preprocessing time with soundfile.
+    """
+    try:
+        from datasets import Audio, DatasetDict
+    except ImportError:
+        return ds
+
+    def _cast(d):
+        for col, feat in list(d.features.items()):
+            if isinstance(feat, Audio):
+                d = d.cast_column(col, Audio(decode=False))
+        return d
+
+    if isinstance(ds, DatasetDict):
+        for k in list(ds.keys()):
+            ds[k] = _cast(ds[k])
+        return ds
+    return _cast(ds)
 
 
 def _print_header(name: str, path: Path) -> None:
@@ -99,6 +130,7 @@ def check_edacc(path: Path) -> bool:
     except Exception as e:
         print(f"  STATUS: failed to load HF dataset: {e}")
         return False
+    ds = _disable_audio_decoding(ds)
     print(f"  splits: {list(ds.keys())}")
     for s in ds:
         d = ds[s]
@@ -128,6 +160,7 @@ def check_l2arctic(path: Path) -> bool:
     except Exception as e:
         print(f"  STATUS: failed to load HF dataset: {e}")
         return False
+    ds = _disable_audio_decoding(ds)
     print(f"  splits: {list(ds.keys())}")
     for s in ds:
         d = ds[s]
