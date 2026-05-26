@@ -16,7 +16,7 @@ on a scratch disk).
 |---|---|:---:|---:|---|---|
 | [EdAcc](#edacc) | `download_edacc.py` | ✅ fully | ~6.95 GB | CC-BY-SA | accent (25), L1 (29), gender (3) |
 | [L2-ARCTIC](#l2-arctic) | `download_l2arctic.py` | ✅ after HF login | ~473 MB | CC-BY-NC | L1 (6), native vs non-native |
-| [Artie Bias](#artie-bias-corpus) | `download_artie.py` | ✅ direct tarball (audio + TSV) | ~few hundred MB | CC-0 | gender, age, accent (balanced) |
+| [Artie Bias](#artie-bias-corpus) | `download_artie.py` | ⚠️ TSV auto, **audio CDN dead** | ~5 MB TSV; audio you supply | CC-0 | gender, age, accent (balanced) |
 | [CORAAL](#coraal) | `download_coraal.py` | ✅ direct URLs | tens of GB total | CC BY-NC-SA | regional AAL, age, sex, education |
 | [Fair-Speech](#fair-speech) | `download_fairspeech.py` | ❌ no public URL surfaced | unknown | TBD | gender, age, ethnicity, geo, native flag |
 
@@ -52,21 +52,30 @@ python experiments/bias_pruning/data_external/download_l2arctic.py
 python experiments/bias_pruning/data_external/download_artie.py
 ```
 
-- **Direct tarball** at `http://ml-corpora.artie.com/artie-bias-corpus.tar.gz`
-  contains both the TSV (`client_id, path, sentence, up_votes, down_votes,
-  age, gender, accent`) and the matching MP3 clips bundled together —
-  no need to wrangle a Mozilla CV release.
-- The script downloads + extracts everything into `data/artie_bias/`.
-- 1,712 clips, ~2.4 h, 17 distinct English accents, CC-0 licensed.
+**Status (May 2026):** the original Artie audio CDN
+(`http://ml-corpora.artie.com/`) is dead — DNS no longer resolves, the
+host returns `ECONNREFUSED`. Artie Inc. was acquired by Match Group and
+the corpus was retired with no announced successor. No mirror found on
+HuggingFace, Zenodo, or archive.org as of May 2026.
 
-Fallback path (if the Artie CDN is down):
-```bash
-python experiments/bias_pruning/data_external/download_artie.py --tsv_only
-```
-That clones only the [GitHub repo](https://github.com/artie-inc/artie-bias-corpus)
-for the TSV and bias-detection scripts. You then have to source the MP3s
-yourself (Mozilla CV June 2019, available via the Mozilla Data Collective
-since Oct 2025).
+What the downloader can still do:
+- Clone `artie-inc/artie-bias-corpus` for the TSV (same column schema
+  as CommonVoice: `client_id, path, sentence, up_votes, down_votes,
+  age, gender, accent`) and the original bias-detection scripts.
+
+What still has to be done manually:
+- Source the 1,712 MP3 clips from a copy of **CommonVoice English June 2019**
+  (Mozilla Data Collective since Oct 2025 — or a local mirror if you,
+  the lab, or collaborators kept one).
+- Place each clip under `data/artie_bias/clips/<path>` matching the
+  TSV's `path` column.
+
+**Recommendation:** Artie has become the hardest of the five external
+datasets to operationalise. Its scientific value (~2.4 h, balanced
+cells, CC-0) is real but the audio-sourcing cost is now high enough
+that EdAcc + Fair-Speech are a better starting pair. Skip Artie unless
+you specifically need its balanced-by-design cell structure as a
+confirmation.
 
 ## CORAAL
 
