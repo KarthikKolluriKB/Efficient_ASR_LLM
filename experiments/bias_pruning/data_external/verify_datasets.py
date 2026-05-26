@@ -232,7 +232,21 @@ def check_coraal(path: Path) -> bool:
         print("  STATUS: missing — run `python data_external/download_coraal.py --components DCA`")
         return False
 
-    components = [p for p in path.iterdir() if p.is_dir() and not _is_macos_junk(p)]
+    # CORAAL metadata files live in a top-level metadata/ subdir (downloaded
+    # from lingtools.uoregon.edu/coraal/explorer/files/METAs/ since they don't
+    # ship inside the per-component tarballs).
+    meta_dir = path / "metadata"
+    meta_files = sorted(meta_dir.glob("*_metadata_*.txt")) if meta_dir.exists() else []
+    if meta_files:
+        print(f"  metadata files ({len(meta_files)} in {meta_dir}):")
+        for m in meta_files:
+            print(f"    {m.name} ({m.stat().st_size/1024:.1f} KB)")
+    else:
+        print(f"  metadata files: none under {meta_dir}.")
+        print(f"    Re-run `download_coraal.py` (now also fetches METAs/) or download manually from")
+        print(f"    https://lingtools.uoregon.edu/coraal/explorer/files/METAs/")
+
+    components = [p for p in path.iterdir() if p.is_dir() and not _is_macos_junk(p) and p.name != "metadata"]
     if not components:
         print(f"  STATUS: no components found under {path}")
         return False
@@ -268,10 +282,7 @@ def check_coraal(path: Path) -> bool:
             except Exception as e:
                 print(f"    (could not read {txt.name}: {e})")
         if demos:
-            print(f"    demographics file(s): {[p.name for p in demos]}")
-        else:
-            print(f"    NOTE: no per-speaker metadata file found in {comp.name}; "
-                  "may live alongside the component or in a top-level CORAAL_README/.")
+            print(f"    embedded demographics file(s): {[p.name for p in demos]}")
 
     if total_junk:
         print(f"  ({total_junk} macOS resource-fork files filtered across all components)")

@@ -37,6 +37,7 @@ import urllib.request
 from pathlib import Path
 
 INDEX_URL = "http://lingtools.uoregon.edu/coraal/"
+METADATA_INDEX_URL = "https://lingtools.uoregon.edu/coraal/explorer/files/METAs/"
 
 
 def parse_args():
@@ -49,7 +50,49 @@ def parse_args():
     p.add_argument("--all", action="store_true", help="Download every component listed in the index.")
     p.add_argument("--list_only", action="store_true", help="Print available components and URLs, do not download.")
     p.add_argument("--no_extract", action="store_true", help="Skip the tar -xzf step after download.")
+    p.add_argument("--no_metadata", action="store_true",
+                   help="Skip the per-component metadata .txt download "
+                        "(lingtools.uoregon.edu/coraal/explorer/files/METAs/).")
     return p.parse_args()
+
+
+def fetch_metadata_index() -> dict[str, str]:
+    """Scrape the METAs/ directory and return {component_code: full_URL_to_latest_metadata}.
+    If a component ships multiple dated metadata files, the lexically largest
+    (most recent) is chosen.
+    """
+    print(f"[CORAAL] Fetching metadata index from {METADATA_INDEX_URL}")
+    import re as _re
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    req = urllib.request.Request(METADATA_INDEX_URL, headers={"User-Agent": "Mozilla/5.0 (bias_pruning)"})
+    with urllib.request.urlopen(req, context=ctx, timeout=60) as r:
+        html = r.read().decode("utf-8", errors="replace")
+
+    files = _re.findall(r'href=["\']([A-Z]{3,4}_metadata_[0-9.]+\.txt)["\']', html)
+    by_comp: dict[str, list[str]] = {}
+    for f in files:
+        comp = f.split("_", 1)[0]
+        by_comp.setdefault(comp, []).append(f)
+    # Pick the most recent (lexically largest filename, since dates are YYYY.MM.DD).
+    return {comp: urllib.parse.urljoin(METADATA_INDEX_URL, sorted(files)[-1])
+            for comp, files in by_comp.items()}
+
+
+def download_metadata(output_dir: Path, components: list[str] | None = None) -> None:
+    """Download per-component CORAAL metadata .txt files into <output_dir>/metadata/."""
+    meta_index = fetch_metadata_index()
+    if components:
+        meta_index = {c: u for c, u in meta_index.items() if c.upper() in {x.upper() for x in components}}
+    meta_dir = output_dir / "metadata"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    for comp, url in sorted(meta_index.items()):
+        fname = Path(urllib.parse.urlparse(url).path).name
+        out = meta_dir / fname
+        download_one(url, out)
+    print(f"[CORAAL] Metadata files in: {meta_dir}")
 
 
 def fetch_index_html() -> str:
@@ -156,6 +199,14 @@ def main():
             download_one(url, out)
             if not args.no_extract:
                 maybe_extract(out, comp_dir)
+
+    if not args.no_metadata:
+        try:
+            download_metadata(args.output_dir, components=chosen)
+        except Exception as e:
+            print(f"[CORAAL] WARNING: metadata download failed: {e}")
+            print("[CORAAL]          Re-run with the same args once the lingtools site is reachable, "
+                  "or fetch manually from https://lingtools.uoregon.edu/coraal/explorer/files/METAs/")
 
     print("[CORAAL] Done.")
 
