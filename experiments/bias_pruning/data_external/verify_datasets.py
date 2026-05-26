@@ -216,29 +216,50 @@ def check_fairspeech(path: Path) -> bool:
     return True
 
 
+def _is_macos_junk(p: Path) -> bool:
+    """macOS extended-attribute resource-fork files. Created when tarballs
+    are produced on a Mac; not part of the actual CORAAL distribution."""
+    return p.name.startswith("._")
+
+
+def _list_files(dirp: Path, suffix: str) -> list[Path]:
+    return [p for p in dirp.rglob(f"*{suffix}") if not _is_macos_junk(p)]
+
+
 def check_coraal(path: Path) -> bool:
     _print_header("CORAAL", path)
     if not path.exists():
         print("  STATUS: missing — run `python data_external/download_coraal.py --components DCA`")
         return False
 
-    components = [p for p in path.iterdir() if p.is_dir()]
+    components = [p for p in path.iterdir() if p.is_dir() and not _is_macos_junk(p)]
     if not components:
         print(f"  STATUS: no components found under {path}")
         return False
     print(f"  components on disk: {[c.name for c in components]}")
-    for comp in components:
-        wavs = list(comp.rglob("*.wav"))
-        txts = list(comp.rglob("*.txt"))
-        tgs = list(comp.rglob("*.TextGrid"))
-        eafs = list(comp.rglob("*.eaf"))
-        tars = list(comp.rglob("*.tar.gz"))
-        print(f"    {comp.name}: {len(wavs)} wav, {len(txts)} txt, {len(tgs)} TextGrid, {len(eafs)} eaf, {len(tars)} tar.gz")
+    total_junk = 0
+    for comp in sorted(components, key=lambda p: p.name):
+        wavs = _list_files(comp, ".wav")
+        txts = _list_files(comp, ".txt")
+        tgs = _list_files(comp, ".TextGrid")
+        eafs = _list_files(comp, ".eaf")
+        tars = _list_files(comp, ".tar.gz")
+        # Heuristic for a per-speaker demographics file shipped with each
+        # CORAAL component (e.g. CORAAL_DCB_metadata_2020.05.txt).
+        demos = [p for p in txts if "metadata" in p.name.lower() or "speaker" in p.name.lower()]
+        junk = sum(1 for p in comp.rglob("*") if _is_macos_junk(p))
+        total_junk += junk
+
+        print(f"    {comp.name}: {len(wavs)} wav, {len(txts)} txt, "
+              f"{len(tgs)} TextGrid, {len(eafs)} eaf, {len(tars)} tar.gz"
+              + (f"  [+{junk} macOS junk filtered]" if junk else ""))
         if wavs:
             sample = wavs[0]
             print(f"    sample wav: {sample.name} ({sample.stat().st_size/1e6:.1f} MB)")
-        if txts:
-            txt = txts[0]
+        # Prefer a non-metadata txt for the transcript-head preview.
+        non_demo = [t for t in txts if t not in demos]
+        if non_demo:
+            txt = non_demo[0]
             try:
                 head = open(txt, "r", encoding="utf-8", errors="replace").read(400)
                 print(f"    sample transcript head ({txt.name}):")
@@ -246,6 +267,14 @@ def check_coraal(path: Path) -> bool:
                     print(f"      {line}")
             except Exception as e:
                 print(f"    (could not read {txt.name}: {e})")
+        if demos:
+            print(f"    demographics file(s): {[p.name for p in demos]}")
+        else:
+            print(f"    NOTE: no per-speaker metadata file found in {comp.name}; "
+                  "may live alongside the component or in a top-level CORAAL_README/.")
+
+    if total_junk:
+        print(f"  ({total_junk} macOS resource-fork files filtered across all components)")
     print("  NOTE: CORAAL interviews are long-form. Plan a chunking step "
           "(transcript timestamps -> <=30 s segments) before ASR eval.")
     print("  STATUS: OK")
