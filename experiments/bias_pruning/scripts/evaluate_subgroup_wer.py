@@ -94,9 +94,10 @@ def _normalise_sentence(s: str) -> str:
 def load_cv_demographics(tsv_path: Path | None) -> dict[tuple[str, str], dict]:
     """Load CV22 en/test.tsv into a (client_id_prefix, normalised_sentence) -> demographics map.
 
-    If `tsv_path` is None, downloads it via huggingface_hub. The prefix is
-    the first 16 chars of `client_id` because the HF preprocessing pipeline
-    truncates it to that length.
+    Used only when --demographic_source=cv22_tsv. The CV22 preprocessed HF
+    dataset drops demographic columns, so we have to join back to the
+    upstream TSV. The prefix is the first 16 chars of `client_id` because
+    the preprocessing pipeline truncates it to that length.
     """
     if tsv_path is None:
         from huggingface_hub import hf_hub_download
@@ -120,6 +121,48 @@ def load_cv_demographics(tsv_path: Path | None) -> dict[tuple[str, str], dict]:
                 "path": row.get("path", ""),
             }
     return out
+
+
+def join_demographics_from_hf_columns(
+    rows: list[dict],
+    hf_dataset,
+    demographic_columns: list[str],
+) -> tuple[list[dict], int]:
+    """Read demographic columns directly from the HF dataset rows (by row_idx).
+
+    Used when the dataset's HF format already carries demographics inline
+    (which is what the data adapters under datamodule/hf_*.py produce).
+    The `gender` column, if present, is normalised through _norm_gender so
+    downstream gap analyses see consistent {male, female, other, missing}
+    values regardless of how each dataset spells them ('m'/'f', 'Male'/'Female', etc.).
+
+    `n_missing` here counts rows whose `gender` resolved to 'missing'
+    (parallel to the CV22-join unmatched count) so the existing logging
+    semantics carry over.
+    """
+    n_missing = 0
+    for r in rows:
+        idx = r["row_idx"]
+        sample = hf_dataset[idx]
+        for col in demographic_columns:
+            raw = sample.get(col, None)
+            if col == "gender":
+                r["gender"] = _norm_gender(raw if isinstance(raw, str) else None)
+            else:
+                v = (raw or "")
+                r[col] = v.strip().lower() if isinstance(v, str) else "missing"
+                if r[col] == "":
+                    r[col] = "missing"
+        # Ensure all the columns the downstream summary expects exist, even
+        # if this dataset doesn't ship them. Missing axes are simply absent
+        # from the per-utt CSV's content but the per-gender summary still
+        # works since it only needs `gender`.
+        for required in ("gender", "age", "accent"):
+            r.setdefault(required, "missing")
+        r.setdefault("client_id_full", r.get("speaker_id", ""))
+        if r["gender"] == "missing":
+            n_missing += 1
+    return rows, n_missing
 
 
 # ---------------------------------------------------------------------------
@@ -387,8 +430,21 @@ def parse_args():
     p.add_argument("--language", default="en")
     p.add_argument("--split", default="test")
     p.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--hf_dataset_path", type=Path, default=None,
+                   help="Override data.hf_dataset_path in the YAML config. Use this to point "
+                        "the inference loader at a non-CV22 dataset built by "
+                        "datamodule/hf_<dataset>.py (e.g., data/l2arctic_hf/).")
+    p.add_argument("--demographic_source", choices=["cv22_tsv", "hf_columns"],
+                   default="cv22_tsv",
+                   help="cv22_tsv: join from upstream CV22 transcript/en/test.tsv (CV22 only). "
+                        "hf_columns: read demographic columns directly from the HF dataset rows.")
+    p.add_argument("--demographic_columns", nargs="+",
+                   default=["gender", "age", "accent", "l1", "ses", "ethnicity"],
+                   help="Column names to pull from each HF dataset row when "
+                        "--demographic_source=hf_columns. Missing columns become 'missing'.")
     p.add_argument("--cv_test_tsv", type=Path, default=None,
-                   help="Path to upstream CV22 transcript/en/test.tsv. Downloaded if omitted.")
+                   help="Path to upstream CV22 transcript/en/test.tsv. Downloaded if omitted. "
+                        "Only used when --demographic_source=cv22_tsv.")
     p.add_argument("--output_path", type=Path, default=None,
                    help="Per-utterance results CSV. Default: experiments/bias_pruning/results/per_utterance/{condition}_{seed}.csv")
     p.add_argument("--per_seed_dir", type=Path, default=DEFAULT_PER_SEED_DIR)
@@ -491,6 +547,11 @@ def main():
         raise SystemExit(f"Checkpoint not found: {args.checkpoint_path}")
 
     cfg = OmegaConf.load(str(args.config))
+    if args.hf_dataset_path is not None:
+        # Override the dataset path at runtime so the same YAML config can be
+        # reused across datasets. The data loader reads cfg.data.hf_dataset_path.
+        cfg.data.hf_dataset_path = str(args.hf_dataset_path)
+        print(f"[Eval] Override: cfg.data.hf_dataset_path = {cfg.data.hf_dataset_path}")
     device = torch.device(args.device)
 
     use_wandb, wandb_project, wandb_run_name = _resolve_wandb_settings(cfg, args)
@@ -517,12 +578,34 @@ def main():
         rows = run_inference(cfg, args.checkpoint_path, device, split=args.split)
         print(f"[Eval] Inference produced {len(rows)} rows.")
 
-        print("[Eval] Loading CV22 demographics ...")
-        demo_map = load_cv_demographics(args.cv_test_tsv)
-        rows, n_unmatched = join_demographics(rows, demo_map)
-        if n_unmatched:
-            print(f"[Eval] WARNING: {n_unmatched} of {len(rows)} utterances did not match a CV22 demo row "
-                  "(speaker_id prefix + normalised sentence). These are labelled gender=missing.")
+        if args.demographic_source == "cv22_tsv":
+            print("[Eval] Loading CV22 demographics from upstream test.tsv ...")
+            demo_map = load_cv_demographics(args.cv_test_tsv)
+            rows, n_unmatched = join_demographics(rows, demo_map)
+            if n_unmatched:
+                print(f"[Eval] WARNING: {n_unmatched} of {len(rows)} utterances did not match a "
+                      "CV22 demo row (speaker_id prefix + normalised sentence). "
+                      "These are labelled gender=missing.")
+        else:  # hf_columns
+            print(f"[Eval] Reading demographics from HF dataset columns: "
+                  f"{args.demographic_columns}")
+            from datasets import load_from_disk
+            # The inference loop already loaded the HF dataset, but it's
+            # scoped inside run_inference(). Reload here — fast, columnar.
+            hf_dataset_path = cfg.data.hf_dataset_path
+            ds = load_from_disk(hf_dataset_path)
+            split_name = args.split
+            if split_name in ("val", "dev"):
+                split_name = "validation"
+            if split_name not in ds:
+                raise SystemExit(f"Split '{split_name}' not found in {hf_dataset_path}. "
+                                 f"Available: {list(ds.keys())}")
+            rows, n_missing = join_demographics_from_hf_columns(
+                rows, ds[split_name], args.demographic_columns,
+            )
+            if n_missing:
+                print(f"[Eval] {n_missing} of {len(rows)} rows had no `gender` value in the dataset; "
+                      "they are labelled gender=missing.")
 
         out_utt = args.output_path or (
             PROJECT_ROOT / "experiments/bias_pruning/results/per_utterance"

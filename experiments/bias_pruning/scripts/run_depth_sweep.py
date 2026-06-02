@@ -44,6 +44,36 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_EVAL_SCRIPT = PROJECT_ROOT / "experiments/bias_pruning/scripts/evaluate_subgroup_wer.py"
 
 
+# Registry of evaluation datasets the sweep can target. Each entry tells
+# evaluate_subgroup_wer.py where the HF dataset lives, which demographic
+# axes it ships, and how to extract demographics. Extend with new datasets
+# (Fair-Speech, EdAcc, CORAAL) by adding entries here once their builders
+# under datamodule/hf_*.py have run.
+DATASETS = {
+    "cv22": {
+        "hf_dataset_path": "data/cv22_hf/en",
+        "demographic_source": "cv22_tsv",
+        "demographic_columns": None,    # cv22_tsv path does its own join
+        "wandb_project_default": "whisper_small_bias_sweep_en",
+        "tag_suffix": "cv22",
+    },
+    "l2arctic": {
+        "hf_dataset_path": "data/l2arctic_hf",
+        "demographic_source": "hf_columns",
+        "demographic_columns": ["gender", "l1", "native_english", "age", "accent"],
+        "wandb_project_default": "whisper_small_bias_sweep_l2arctic",
+        "tag_suffix": "l2arctic",
+    },
+    "fairspeech": {
+        "hf_dataset_path": "data/fairspeech_hf",
+        "demographic_source": "hf_columns",
+        "demographic_columns": ["gender", "age", "l1", "ses", "ethnicity"],
+        "wandb_project_default": "whisper_small_bias_sweep_fairspeech",
+        "tag_suffix": "fairspeech",
+    },
+}
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Sweep evaluate_subgroup_wer.py over pruning depths.")
     p.add_argument("--model_dir", type=Path,
@@ -64,8 +94,12 @@ def parse_args():
                    help="Per-depth overrides, format 'depth=/abs/path/checkpoint.pt'. Example: "
                         "--checkpoint_overrides 2=/scratch/ckpts/depth2.pt 4=/scratch/ckpts/depth4.pt")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--wandb_project", type=str, default="whisper_small_bias_sweep_en",
-                   help="wandb project name for all runs in this sweep.")
+    p.add_argument("--dataset", choices=sorted(DATASETS.keys()), default="cv22",
+                   help="Which evaluation dataset to point evaluate_subgroup_wer.py at. "
+                        "Pick from the registry at the top of this script.")
+    p.add_argument("--wandb_project", type=str, default=None,
+                   help="wandb project name for all runs in this sweep. "
+                        "Defaults to the dataset's wandb_project_default.")
     p.add_argument("--device", default=None,
                    help="Pass to evaluate_subgroup_wer.py. If unset, that script picks its own default. "
                         "Prefer CUDA_VISIBLE_DEVICES=N instead so each child sees just one GPU.")
@@ -120,9 +154,19 @@ def main():
     if not DEFAULT_EVAL_SCRIPT.exists():
         raise SystemExit(f"Missing eval script: {DEFAULT_EVAL_SCRIPT}")
 
-    print(f"[Sweep] depths to evaluate: {depths}")
-    print(f"[Sweep] wandb project: {args.wandb_project}")
-    print(f"[Sweep] eval script:   {DEFAULT_EVAL_SCRIPT}")
+    dataset_cfg = DATASETS[args.dataset]
+    wandb_project = args.wandb_project or dataset_cfg["wandb_project_default"]
+    hf_dataset_path = PROJECT_ROOT / dataset_cfg["hf_dataset_path"]
+    if args.dataset != "cv22" and not hf_dataset_path.exists():
+        print(f"[Sweep] WARNING: HF dataset for '{args.dataset}' not found at {hf_dataset_path}. "
+              f"Run the matching builder under datamodule/hf_{args.dataset}.py first.")
+
+    print(f"[Sweep] dataset:        {args.dataset}  ({hf_dataset_path})")
+    print(f"[Sweep] depths:         {depths}")
+    print(f"[Sweep] wandb project:  {wandb_project}")
+    print(f"[Sweep] eval script:    {DEFAULT_EVAL_SCRIPT}")
+    print(f"[Sweep] demographics:   {dataset_cfg['demographic_source']}"
+          + (f", columns={dataset_cfg['demographic_columns']}" if dataset_cfg['demographic_columns'] else ""))
 
     # Plan first — surface missing checkpoints before any GPU work.
     plan: list[dict] = []
@@ -162,9 +206,13 @@ def main():
             "--seed", str(args.seed),
             "--condition", p_["condition"],
             "--n_bootstrap", str(args.n_bootstrap),
-            "--wandb_project", args.wandb_project,
+            "--wandb_project", wandb_project,
             "--wandb_run_name", p_["condition"],
+            "--hf_dataset_path", str(hf_dataset_path),
+            "--demographic_source", dataset_cfg["demographic_source"],
         ]
+        if dataset_cfg["demographic_columns"]:
+            cmd += ["--demographic_columns", *dataset_cfg["demographic_columns"]]
         if args.cv_test_tsv:
             cmd += ["--cv_test_tsv", str(args.cv_test_tsv)]
         if args.per_seed_dir:
