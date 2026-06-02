@@ -51,6 +51,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from datamodule.dataset import get_speech_dataset  # noqa: E402
 from models.model import model_builder  # noqa: E402
+from utils.wand_config import init_wandb  # noqa: E402
 
 # Local imports
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -376,10 +377,13 @@ def parse_args():
     p.add_argument("--checkpoint_path", type=Path, required=True,
                    help="Path to the projector checkpoint (.pt).")
     p.add_argument("--prune_depth", type=int, required=True,
-                   help="Top-down prune depth. 0 == unpruned baseline, 2 == 2L pruned (22 layers kept).")
+                   help="Top-down prune depth. 0 == unpruned. For whisper-small 12L total: "
+                        "prune_depth=N means (12-N) layers kept.")
     p.add_argument("--seed", type=int, required=True,
                    help="Training seed of this checkpoint (for filename + bookkeeping only).")
-    p.add_argument("--condition", choices=["unpruned", "pruned_2L"], required=True)
+    p.add_argument("--condition", type=str, required=True,
+                   help="Free-form condition label used in output filenames (e.g. 'unpruned', "
+                        "'pruned_2L', 'depth_05_kept_07').")
     p.add_argument("--language", default="en")
     p.add_argument("--split", default="test")
     p.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
@@ -392,7 +396,86 @@ def parse_args():
     p.add_argument("--target_wer", type=float, default=None,
                    help="Paper 1's reported aggregate WER for this condition (0-1 scale). "
                         "If provided, the script exits non-zero when the gap exceeds 0.005 (0.5 abs pts).")
+    p.add_argument("--wandb_project", type=str, default=None,
+                   help="Override the wandb project name. If unset, uses log.wandb_project_name "
+                        "from the YAML config (or skips wandb if log.use_wandb is false there).")
+    p.add_argument("--wandb_run_name", type=str, default=None,
+                   help="Override the wandb run name. Default: '{condition}_seed{seed}'.")
+    p.add_argument("--no_wandb", action="store_true",
+                   help="Disable wandb entirely for this run, even if log.use_wandb is true in config.")
     return p.parse_args()
+
+
+def _resolve_wandb_settings(cfg, args) -> tuple[bool, str, str]:
+    """Return (use_wandb, project, run_name) from CLI overrides + config + defaults."""
+    if args.no_wandb:
+        return False, "", ""
+    log_cfg = cfg.log if hasattr(cfg, "log") else None
+    config_says_on = bool(getattr(log_cfg, "use_wandb", False)) if log_cfg else False
+    use = config_says_on or bool(args.wandb_project)
+    project = args.wandb_project or (getattr(log_cfg, "wandb_project_name", None) if log_cfg else None) \
+              or "bias_pruning_eval"
+    run_name = args.wandb_run_name or f"{args.condition}_seed{args.seed}"
+    return use, project, run_name
+
+
+def _log_artifacts_to_wandb(run, *, per_utt_csv: Path, summary_csv: Path,
+                            aggregate_row: dict, summary_rows: list[dict],
+                            condition: str, prune_depth: int, seed: int) -> None:
+    """Upload outputs as wandb artifacts + log scalar/tabular metrics. No-op if run is None."""
+    if run is None:
+        return
+    try:
+        import wandb
+    except ImportError:
+        return
+
+    # 1. Scalar summaries (top-level metric panel + tagged for sweep grouping)
+    run.summary["condition"] = condition
+    run.summary["prune_depth"] = prune_depth
+    run.summary["seed"] = seed
+    run.summary["aggregate/wer"] = aggregate_row["wer"]
+    run.summary["aggregate/cer"] = aggregate_row["cer"]
+    run.summary["aggregate/n_utts"] = aggregate_row["n_utts"]
+    for r in summary_rows:
+        g = r["gender"]
+        if g == "ALL":
+            continue
+        run.summary[f"wer/{g}"] = r["wer"]
+        run.summary[f"cer/{g}"] = r["cer"]
+        run.summary[f"n_utts/{g}"] = r["n_utts"]
+    # Step-style logs so the sweep can plot WER vs depth across runs.
+    run.log({
+        "depth/prune_depth": prune_depth,
+        "depth/aggregate_wer": aggregate_row["wer"],
+        "depth/aggregate_cer": aggregate_row["cer"],
+        **{f"depth/wer_{r['gender']}": r["wer"] for r in summary_rows if r["gender"] != "ALL"},
+        **{f"depth/cer_{r['gender']}": r["cer"] for r in summary_rows if r["gender"] != "ALL"},
+    })
+
+    # 2. Per-gender table (browseable in the wandb UI)
+    table = wandb.Table(columns=["gender", "n_utts", "duration_hours",
+                                  "wer", "wer_ci_low", "wer_ci_high",
+                                  "cer", "cer_ci_low", "cer_ci_high", "analysable"])
+    for r in summary_rows:
+        table.add_data(r["gender"], r["n_utts"], r["duration_hours"],
+                       r["wer"], r["wer_ci_low"], r["wer_ci_high"],
+                       r["cer"], r["cer_ci_low"], r["cer_ci_high"], r["analysable"])
+    run.log({"per_gender_summary": table})
+
+    # 3. Artifacts: per-utterance CSV (license-aware — caller decides whether
+    # to use this on restricted-license datasets) and per-gender summary CSV.
+    art = wandb.Artifact(
+        name=f"bias_eval_{condition}_seed{seed}",
+        type="bias_eval_results",
+        description=f"Per-utterance + per-gender outputs for condition={condition}, seed={seed}.",
+        metadata={"condition": condition, "prune_depth": prune_depth, "seed": seed},
+    )
+    if per_utt_csv.exists():
+        art.add_file(str(per_utt_csv), name=per_utt_csv.name)
+    if summary_csv.exists():
+        art.add_file(str(summary_csv), name=summary_csv.name)
+    run.log_artifact(art)
 
 
 def main():
@@ -406,51 +489,89 @@ def main():
     cfg = OmegaConf.load(str(args.config))
     device = torch.device(args.device)
 
-    rows = run_inference(cfg, args.checkpoint_path, device, split=args.split)
-    print(f"[Eval] Inference produced {len(rows)} rows.")
+    use_wandb, wandb_project, wandb_run_name = _resolve_wandb_settings(cfg, args)
+    run = None
+    if use_wandb:
+        run = init_wandb(
+            use_wand=True,
+            project=wandb_project,
+            run_name=wandb_run_name,
+            tags=["bias_eval", args.condition, f"depth_{args.prune_depth}", f"seed_{args.seed}"],
+            config={
+                "condition": args.condition,
+                "prune_depth": args.prune_depth,
+                "seed": args.seed,
+                "config_path": str(args.config),
+                "checkpoint_path": str(args.checkpoint_path),
+                "language": args.language,
+                "split": args.split,
+                "n_bootstrap": args.n_bootstrap,
+            },
+        )
 
-    print("[Eval] Loading CV22 demographics ...")
-    demo_map = load_cv_demographics(args.cv_test_tsv)
-    rows, n_unmatched = join_demographics(rows, demo_map)
-    if n_unmatched:
-        print(f"[Eval] WARNING: {n_unmatched} of {len(rows)} utterances did not match a CV22 demo row "
-              "(speaker_id prefix + normalised sentence). These are labelled gender=missing.")
+    try:
+        rows = run_inference(cfg, args.checkpoint_path, device, split=args.split)
+        print(f"[Eval] Inference produced {len(rows)} rows.")
 
-    out_utt = args.output_path or (
-        PROJECT_ROOT / "experiments/bias_pruning/results/per_utterance"
-        / f"{args.condition}_seed{args.seed}.csv"
-    )
-    write_per_utterance_csv(rows, out_utt)
-    print(f"[Eval] Wrote per-utterance CSV: {out_utt}")
+        print("[Eval] Loading CV22 demographics ...")
+        demo_map = load_cv_demographics(args.cv_test_tsv)
+        rows, n_unmatched = join_demographics(rows, demo_map)
+        if n_unmatched:
+            print(f"[Eval] WARNING: {n_unmatched} of {len(rows)} utterances did not match a CV22 demo row "
+                  "(speaker_id prefix + normalised sentence). These are labelled gender=missing.")
 
-    summary_rows, aggregate_row = per_gender_summary(
-        rows, condition=args.condition, seed=args.seed, n_bootstrap=args.n_bootstrap,
-    )
-    summary_path = args.per_seed_dir / f"{args.condition}_seed{args.seed}.csv"
-    write_summary_csv(summary_rows, summary_path)
-    print(f"[Eval] Wrote per-gender summary: {summary_path}")
+        out_utt = args.output_path or (
+            PROJECT_ROOT / "experiments/bias_pruning/results/per_utterance"
+            / f"{args.condition}_seed{args.seed}.csv"
+        )
+        write_per_utterance_csv(rows, out_utt)
+        print(f"[Eval] Wrote per-utterance CSV: {out_utt}")
 
-    # Pretty-print summary
-    print("\n=== Per-gender WER / CER (this seed) ===")
-    print(f"{'gender':<8} {'n':>6} {'hours':>7} "
-          f"{'WER':>8} {'WER 95% CI':>20} "
-          f"{'CER':>8} {'CER 95% CI':>20} {'analysable':>11}")
-    for r in summary_rows:
-        wci = f"[{r['wer_ci_low']*100:.2f}, {r['wer_ci_high']*100:.2f}]"
-        cci = f"[{r['cer_ci_low']*100:.2f}, {r['cer_ci_high']*100:.2f}]"
-        print(f"{r['gender']:<8} {r['n_utts']:>6d} {r['duration_hours']:>7.2f} "
-              f"{r['wer']*100:>7.2f}% {wci:>20} "
-              f"{r['cer']*100:>7.2f}% {cci:>20} {r['analysable']:>11}")
+        summary_rows, aggregate_row = per_gender_summary(
+            rows, condition=args.condition, seed=args.seed, n_bootstrap=args.n_bootstrap,
+        )
+        summary_path = args.per_seed_dir / f"{args.condition}_seed{args.seed}.csv"
+        write_summary_csv(summary_rows, summary_path)
+        print(f"[Eval] Wrote per-gender summary: {summary_path}")
 
-    print(f"\nAggregate WER = {aggregate_row['wer']*100:.2f}% | "
-          f"Aggregate CER = {aggregate_row['cer']*100:.2f}% on {aggregate_row['n_utts']} utts.")
-    if args.target_wer is not None:
-        diff = abs(aggregate_row["wer"] - args.target_wer)
-        ok = diff <= 0.005
-        print(f"Target (paper 1): {args.target_wer*100:.2f}% | abs diff = {diff*100:.2f} pts | within 0.5 pts: {ok}")
-        if not ok:
-            print("[Eval] FAIL: aggregate WER deviates from paper 1 by more than 0.5 absolute points.")
-            raise SystemExit(2)
+        # Pretty-print summary
+        print("\n=== Per-gender WER / CER (this seed) ===")
+        print(f"{'gender':<8} {'n':>6} {'hours':>7} "
+              f"{'WER':>8} {'WER 95% CI':>20} "
+              f"{'CER':>8} {'CER 95% CI':>20} {'analysable':>11}")
+        for r in summary_rows:
+            wci = f"[{r['wer_ci_low']*100:.2f}, {r['wer_ci_high']*100:.2f}]"
+            cci = f"[{r['cer_ci_low']*100:.2f}, {r['cer_ci_high']*100:.2f}]"
+            print(f"{r['gender']:<8} {r['n_utts']:>6d} {r['duration_hours']:>7.2f} "
+                  f"{r['wer']*100:>7.2f}% {wci:>20} "
+                  f"{r['cer']*100:>7.2f}% {cci:>20} {r['analysable']:>11}")
+
+        print(f"\nAggregate WER = {aggregate_row['wer']*100:.2f}% | "
+              f"Aggregate CER = {aggregate_row['cer']*100:.2f}% on {aggregate_row['n_utts']} utts.")
+        if args.target_wer is not None:
+            diff = abs(aggregate_row["wer"] - args.target_wer)
+            ok = diff <= 0.005
+            print(f"Target (paper 1): {args.target_wer*100:.2f}% | abs diff = {diff*100:.2f} pts | within 0.5 pts: {ok}")
+            if not ok:
+                print("[Eval] FAIL: aggregate WER deviates from paper 1 by more than 0.5 absolute points.")
+                raise SystemExit(2)
+
+        _log_artifacts_to_wandb(
+            run,
+            per_utt_csv=out_utt,
+            summary_csv=summary_path,
+            aggregate_row=aggregate_row,
+            summary_rows=summary_rows,
+            condition=args.condition,
+            prune_depth=args.prune_depth,
+            seed=args.seed,
+        )
+    finally:
+        if run is not None:
+            try:
+                run.finish()
+            except Exception as e:
+                print(f"[Eval] wandb finish failed: {e}")
 
 
 if __name__ == "__main__":
