@@ -471,10 +471,14 @@ def _log_artifacts_to_wandb(run, *, per_utt_csv: Path, summary_csv: Path,
         description=f"Per-utterance + per-gender outputs for condition={condition}, seed={seed}.",
         metadata={"condition": condition, "prune_depth": prune_depth, "seed": seed},
     )
+    # Two CSVs share the same basename (e.g. d00_keep12_seed42.csv) — they
+    # differ only in parent folder. Disambiguate inside the artifact using
+    # a folder-style name; otherwise wandb rejects the second add_file with
+    # ValueError: Cannot add the same path twice.
     if per_utt_csv.exists():
-        art.add_file(str(per_utt_csv), name=per_utt_csv.name)
+        art.add_file(str(per_utt_csv), name=f"per_utterance/{per_utt_csv.name}")
     if summary_csv.exists():
-        art.add_file(str(summary_csv), name=summary_csv.name)
+        art.add_file(str(summary_csv), name=f"per_gender_wer/{summary_csv.name}")
     run.log_artifact(art)
 
 
