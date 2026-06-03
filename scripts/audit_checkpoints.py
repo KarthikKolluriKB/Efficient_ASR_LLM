@@ -63,8 +63,29 @@ MODEL_SIZE_HINTS = [
 # Parsing
 # ---------------------------------------------------------------------------
 
+def _detect_model_size(tokens) -> str | None:
+    """Find a known model size hint in any of the path tokens. Tolerates
+    both 'whisper-largev2' / 'whisper-s_' / 'whisper-m_' style and the
+    underscore form 'whisper_largev2' / 'whisper_small' / 'whisper_base'.
+    """
+    blob = "/".join(t.lower() for t in tokens)
+    for hint, canonical in MODEL_SIZE_HINTS:
+        if hint in blob:
+            return canonical
+    # `whisper_base` and `whisper-base` appear in the server outputs but are
+    # not size variants we depth-sweep on. Surface them so they're not silent
+    # orphans, just classified as 'base' (not in TOTAL_LAYERS).
+    if "whisper_base" in blob or "whisper-base" in blob:
+        return "base"
+    return None
+
+
 def parse_ckpt_path(p: Path, outputs_root: Path) -> dict | None:
     """Extract (language, model_size, layers_kept, recipe) from a checkpoint path.
+
+    Handles two folder layouts seen in this project:
+        Layout 1: outputs/<language>/<encoder_folder>/checkpoint_best_wer.pt
+        Layout 2: outputs/<model>/<language>/<config>/checkpoint_best_wer.pt
 
     Returns None if any of the four pieces couldn't be confidently parsed.
     """
@@ -76,42 +97,54 @@ def parse_ckpt_path(p: Path, outputs_root: Path) -> dict | None:
     if not parts:
         return None
 
-    language = parts[0].lower()
+    # Detect layout by checking whether parts[0] is a known model token
+    # (underscore form) or a language.
+    first = parts[0].lower()
+    is_layout2 = first.startswith("whisper_") or first.startswith("whisper-")
 
-    # Concatenate the remaining path so we can string-match across folders.
-    tail = "/".join(parts[1:]).lower()
-    if not tail:
-        return None
+    if is_layout2:
+        # outputs/<model>/<lang>/<config>/...
+        if len(parts) < 3:
+            return None
+        language = parts[1].lower()
+        size_tokens = [parts[0]]
+        config_tokens = list(parts[2:])  # the rest (config folder + filename)
+    else:
+        # outputs/<lang>/<encoder_folder...>/...
+        language = parts[0].lower()
+        size_tokens = list(parts[1:])
+        config_tokens = list(parts[1:])
 
-    # Model size
-    model_size = None
-    for hint, canonical in MODEL_SIZE_HINTS:
-        if hint in tail:
-            model_size = canonical
-            break
+    model_size = _detect_model_size(size_tokens)
     if model_size is None:
         return None
 
-    # Recipe
-    recipe = "lora" if "lora" in tail else "full"
+    # Recipe — any "lora" token anywhere classifies as lora; otherwise full.
+    blob = "/".join(t.lower() for t in config_tokens)
+    recipe = "lora" if "lora" in blob else "full"
 
-    # Layers kept: either "baseline" (=> total) or "ablation_<N>L"
+    # Layers kept: 'baseline'/'baseline_<X>' => total, otherwise look for
+    # any '_<N>L' token (handles ablation_NL, baseline_LoRA_NL, etc.).
     layers_kept = None
-    if re.search(r"baseline", tail):
-        layers_kept = TOTAL_LAYERS[model_size]
+    if "baseline" in blob and not re.search(r"_(\d+)l(?:[_/]|$)", blob):
+        # Pure baseline with no layer suffix → use the full layer count.
+        layers_kept = TOTAL_LAYERS.get(model_size)
     else:
-        m = re.search(r"ablation_(\d+)l", tail)
+        m = re.search(r"_(\d+)l(?:[_/]|$)", blob)
         if m:
             layers_kept = int(m.group(1))
+        elif "baseline" in blob:
+            layers_kept = TOTAL_LAYERS.get(model_size)
     if layers_kept is None:
         return None
 
+    total = TOTAL_LAYERS.get(model_size, 0)
     return {
         "path": p,
         "language": language,
         "model_size": model_size,
         "layers_kept": layers_kept,
-        "prune_depth": TOTAL_LAYERS[model_size] - layers_kept,
+        "prune_depth": (total - layers_kept) if total else None,
         "recipe": recipe,
     }
 
@@ -356,10 +389,30 @@ def main():
 
     print_summary(filtered)
 
+    # Surface every classified checkpoint (so the user sees what was found
+    # even when no config expects it — e.g. extra unused ablation depths).
+    extras = []
+    for info in parsed:
+        if lang_filter is not None and info["language"] not in lang_filter:
+            continue
+        if size_filter is not None and info["model_size"] not in size_filter:
+            continue
+        if recipe_filter is not None and info["recipe"] not in recipe_filter:
+            continue
+        extras.append(info)
+    if extras and (lang_filter or size_filter or recipe_filter):
+        print("\n[Audit] Checkpoints matching filters (every parsed path, including ones with no eval config yet):")
+        for info in sorted(extras, key=lambda r: (r["language"], r["model_size"], r["recipe"], r["layers_kept"])):
+            print(f"   {info['language']:<8} whisper-{info['model_size']:<8} kept={info['layers_kept']:>3} "
+                  f"recipe={info['recipe']:<6} {info['path']}")
+
     if orphans:
-        print("\n[Audit] Orphan checkpoints (couldn't classify by path):")
-        for op in orphans:
+        print(f"\n[Audit] Orphan checkpoints (path layout not understood; {len(orphans)} total):")
+        # Limit output to keep it scannable.
+        for op in orphans[:25]:
             print(f"   {op}")
+        if len(orphans) > 25:
+            print(f"   ... and {len(orphans) - 25} more")
 
     if args.csv_out:
         write_csv(filtered, args.csv_out)
