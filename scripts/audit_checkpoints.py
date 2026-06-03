@@ -306,6 +306,16 @@ def parse_args():
                    help="Where trained projectors live.")
     p.add_argument("--configs_dir", type=Path, default=PROJECT_ROOT / "configs",
                    help="Where YAML configs live (used to know what was expected).")
+    p.add_argument("--language", nargs="+", default=None,
+                   help="Filter to one or more languages (english / danish / dutch). "
+                        "Default: all.")
+    p.add_argument("--model_size", nargs="+", default=None,
+                   choices=sorted(TOTAL_LAYERS.keys()),
+                   help="Filter to one or more sizes (small / medium / large-v2). "
+                        "Default: all.")
+    p.add_argument("--recipe", nargs="+", default=None,
+                   choices=["full", "lora"],
+                   help="Filter to one or more training recipes. Default: all.")
     p.add_argument("--csv_out", type=Path, default=None,
                    help="Optional: also dump the coverage table to a CSV.")
     return p.parse_args()
@@ -322,7 +332,29 @@ def main():
     print(f"[Audit] (lang, size, kept, recipe) tuples expected by configs: {len(expected)}")
 
     rows = make_coverage(parsed, expected)
-    print_summary(rows)
+
+    # Apply filters (keep behaviour identical when no filters are passed).
+    lang_filter = {l.lower() for l in args.language} if args.language else None
+    size_filter = set(args.model_size) if args.model_size else None
+    recipe_filter = set(args.recipe) if args.recipe else None
+
+    def _keep(r):
+        if lang_filter is not None and r["language"] not in lang_filter:
+            return False
+        if size_filter is not None and r["model_size"] not in size_filter:
+            return False
+        if recipe_filter is not None and r["recipe"] not in recipe_filter:
+            return False
+        return True
+
+    filtered = [r for r in rows if _keep(r)]
+    if lang_filter or size_filter or recipe_filter:
+        print(f"[Audit] Filters: language={sorted(lang_filter) if lang_filter else 'any'}, "
+              f"model_size={sorted(size_filter) if size_filter else 'any'}, "
+              f"recipe={sorted(recipe_filter) if recipe_filter else 'any'}")
+        print(f"[Audit] Rows after filter: {len(filtered)} / {len(rows)}")
+
+    print_summary(filtered)
 
     if orphans:
         print("\n[Audit] Orphan checkpoints (couldn't classify by path):")
@@ -330,7 +362,7 @@ def main():
             print(f"   {op}")
 
     if args.csv_out:
-        write_csv(rows, args.csv_out)
+        write_csv(filtered, args.csv_out)
 
 
 if __name__ == "__main__":
