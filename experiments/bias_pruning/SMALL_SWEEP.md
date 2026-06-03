@@ -1,5 +1,11 @@
 # Whisper-small depth sweep — bias evaluation runbook
 
+> **✅ COMPLETE — do not re-run.** This CV22 English sweep has already been
+> run for all 12 depths (seed 42). Aggregated results live in
+> `results/small_sweep_en/` (per-gender WER/CER per depth + findings table +
+> plot). Re-running only overwrites identical outputs. The active next step is
+> the Fair-Speech multi-axis sweep — see [FAIRSPEECH_SWEEP.md](FAIRSPEECH_SWEEP.md).
+
 Sweeps the bias evaluation across **all 12 encoder depths** of
 whisper-small on English CommonVoice 22. One eval per depth, results
 streamed to wandb so you can pull them from a browser.

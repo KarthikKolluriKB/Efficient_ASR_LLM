@@ -329,8 +329,12 @@ def join_demographics(rows: list[dict], demo_map: dict[tuple[str, str], dict]) -
 
 def write_per_utterance_csv(rows: list[dict], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fields = ["row_idx", "key", "speaker_id", "client_id_full",
-              "gender", "age", "accent", "duration_s", "reference", "hypothesis"]
+    # Persist every demographic axis that is actually populated, not just the
+    # CV22 trio. Fair-Speech carries l1/ses/ethnicity too; dropping them here
+    # would make those axes unrecoverable without re-running inference.
+    present_demo = [c for c in KNOWN_AXES if any(c in r for r in rows)]
+    fields = ["row_idx", "key", "speaker_id", "client_id_full"] + present_demo \
+        + ["duration_s", "reference", "hypothesis"]
     with open(path, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
@@ -340,6 +344,28 @@ def write_per_utterance_csv(rows: list[dict], path: Path) -> None:
 
 def _empty_metric() -> dict:
     return {"point": float("nan"), "ci_low": float("nan"), "ci_high": float("nan")}
+
+
+# Demographic axes the multi-axis summary understands, in display order.
+KNOWN_AXES = ["gender", "age", "accent", "l1", "ses", "ethnicity"]
+
+
+def _summarise_subset(refs, hyps, n_bootstrap, do_bootstrap):
+    """WER/CER (+ optional bootstrap CI) for one bucket of utterances.
+
+    Shared by per_gender_summary (gender only) and multiaxis_summary (any axis)
+    so both compute metrics identically. Bootstrap is skipped (nb=0) for cells
+    too small to be analysable.
+    """
+    nb = n_bootstrap if do_bootstrap else 0
+    if not refs:
+        return _empty_metric(), _empty_metric()
+    w = wer_with_ci(refs, hyps, n_bootstrap=nb, seed=42)
+    c = cer_with_ci(refs, hyps, n_bootstrap=nb, seed=42)
+    return (
+        {"point": w["wer"], "ci_low": w["ci_low"], "ci_high": w["ci_high"]},
+        {"point": c["cer"], "ci_low": c["ci_low"], "ci_high": c["ci_high"]},
+    )
 
 
 def per_gender_summary(
@@ -413,6 +439,95 @@ def write_summary_csv(summary_rows: list[dict], path: Path) -> None:
             w.writerow(r)
 
 
+# ---------------------------------------------------------------------------
+# Multi-axis summary (gender + age + SES + ethnicity + ...)
+# ---------------------------------------------------------------------------
+
+MULTIAXIS_FIELDS = ["condition", "seed", "axis", "group", "n_utts", "duration_hours",
+                    "wer", "wer_ci_low", "wer_ci_high",
+                    "cer", "cer_ci_low", "cer_ci_high", "analysable"]
+
+
+def _axis_groups(rows: list[dict], axis: str) -> tuple[dict[str, list[dict]], list[str]]:
+    """Bucket rows by the value of `axis`. Returns (groups, ordered_group_names).
+
+    For gender, the canonical {male, female, other, missing} order is used so the
+    output lines up with per_gender_summary; for any other axis the group values
+    (e.g. age ranges '18 - 22', ses 'low'/'medium'/'high') are sorted lexically.
+    """
+    from collections import defaultdict
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        val = r.get(axis, "missing")
+        val = val if (isinstance(val, str) and val) else "missing"
+        groups[val].append(r)
+    if axis == "gender":
+        order = [g for g in GENDER_BUCKETS if g in groups] + \
+                sorted(g for g in groups if g not in GENDER_BUCKETS)
+    else:
+        order = sorted(groups.keys())
+    return groups, order
+
+
+def multiaxis_summary(
+    rows: list[dict],
+    axes: list[str],
+    condition: str,
+    seed: int,
+    n_bootstrap: int = 1000,
+) -> list[dict]:
+    """Long-format per-axis, per-group WER/CER summary.
+
+    One row per (axis, group) plus an (axis, 'ALL') row per axis so each axis
+    sub-table is self-contained. The analysable flag uses the same thresholds
+    as per_gender_summary, so under-powered cells (e.g. a rare ethnicity bucket)
+    are reported with point estimates but no bootstrap CI.
+    """
+    out: list[dict] = []
+    # Aggregate is identical across axes — compute once.
+    total_dur_all = sum(float(r["duration_s"]) for r in rows)
+    agg_wer, agg_cer = _summarise_subset(
+        [r["reference"] for r in rows], [r["hypothesis"] for r in rows],
+        n_bootstrap, do_bootstrap=bool(rows),
+    )
+    for axis in axes:
+        groups, order = _axis_groups(rows, axis)
+        for g in order:
+            subset = groups[g]
+            n = len(subset)
+            dur = sum(float(r["duration_s"]) for r in subset)
+            analysable = (dur >= ANALYSABLE_MIN_SECONDS) and (n >= ANALYSABLE_MIN_UTTS)
+            wer, cer = _summarise_subset(
+                [r["reference"] for r in subset],
+                [r["hypothesis"] for r in subset],
+                n_bootstrap, do_bootstrap=analysable,
+            )
+            out.append({
+                "condition": condition, "seed": seed, "axis": axis, "group": g,
+                "n_utts": n, "duration_hours": round(dur / 3600.0, 4),
+                "wer": wer["point"], "wer_ci_low": wer["ci_low"], "wer_ci_high": wer["ci_high"],
+                "cer": cer["point"], "cer_ci_low": cer["ci_low"], "cer_ci_high": cer["ci_high"],
+                "analysable": "yes" if analysable else "no",
+            })
+        out.append({
+            "condition": condition, "seed": seed, "axis": axis, "group": "ALL",
+            "n_utts": len(rows), "duration_hours": round(total_dur_all / 3600.0, 4),
+            "wer": agg_wer["point"], "wer_ci_low": agg_wer["ci_low"], "wer_ci_high": agg_wer["ci_high"],
+            "cer": agg_cer["point"], "cer_ci_low": agg_cer["ci_low"], "cer_ci_high": agg_cer["ci_high"],
+            "analysable": "yes",
+        })
+    return out
+
+
+def write_multiaxis_csv(rows: list[dict], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=MULTIAXIS_FIELDS)
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") for k in MULTIAXIS_FIELDS})
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Per-subgroup WER evaluation for the bias-pruning experiment.")
     p.add_argument("--config", type=Path, required=True,
@@ -477,7 +592,8 @@ def _resolve_wandb_settings(cfg, args) -> tuple[bool, str, str]:
 
 def _log_artifacts_to_wandb(run, *, per_utt_csv: Path, summary_csv: Path,
                             aggregate_row: dict, summary_rows: list[dict],
-                            condition: str, prune_depth: int, seed: int) -> None:
+                            condition: str, prune_depth: int, seed: int,
+                            multiaxis_csv: Path | None = None) -> None:
     """Upload outputs as wandb artifacts + log scalar/tabular metrics. No-op if run is None."""
     if run is None:
         return
@@ -535,6 +651,8 @@ def _log_artifacts_to_wandb(run, *, per_utt_csv: Path, summary_csv: Path,
         art.add_file(str(per_utt_csv), name=f"per_utterance/{per_utt_csv.name}")
     if summary_csv.exists():
         art.add_file(str(summary_csv), name=f"per_gender_wer/{summary_csv.name}")
+    if multiaxis_csv is not None and multiaxis_csv.exists():
+        art.add_file(str(multiaxis_csv), name=f"per_axis_wer/{multiaxis_csv.name}")
     run.log_artifact(art)
 
 
@@ -621,6 +739,23 @@ def main():
         write_summary_csv(summary_rows, summary_path)
         print(f"[Eval] Wrote per-gender summary: {summary_path}")
 
+        # Multi-axis summary: gender plus every other populated demographic axis
+        # (age, SES, ethnicity, L1...). The canonical per-gender file above is
+        # left untouched for backward compatibility; this is the superset.
+        if args.demographic_source == "hf_columns":
+            requested = args.demographic_columns
+        else:  # cv22_tsv carries gender/age/accent
+            requested = ["gender", "age", "accent"]
+        multi_axes = [a for a in requested
+                      if a in KNOWN_AXES and any(a in r for r in rows)]
+        multiaxis_path = args.per_seed_dir / f"{args.condition}_seed{args.seed}_multiaxis.csv"
+        multi_rows = multiaxis_summary(
+            rows, multi_axes, condition=args.condition, seed=args.seed,
+            n_bootstrap=args.n_bootstrap,
+        )
+        write_multiaxis_csv(multi_rows, multiaxis_path)
+        print(f"[Eval] Wrote multi-axis summary ({', '.join(multi_axes)}): {multiaxis_path}")
+
         # Pretty-print summary
         print("\n=== Per-gender WER / CER (this seed) ===")
         print(f"{'gender':<8} {'n':>6} {'hours':>7} "
@@ -652,6 +787,7 @@ def main():
             condition=args.condition,
             prune_depth=args.prune_depth,
             seed=args.seed,
+            multiaxis_csv=multiaxis_path,
         )
     finally:
         if run is not None:

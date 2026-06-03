@@ -50,6 +50,9 @@ DEFAULT_EVAL_SCRIPT = PROJECT_ROOT / "experiments/bias_pruning/scripts/evaluate_
 # (Fair-Speech, EdAcc, CORAAL) by adding entries here once their builders
 # under datamodule/hf_*.py have run.
 DATASETS = {
+    # NOTE: the cv22 (whisper-small English) sweep is ALREADY COMPLETE for all
+    # 12 depths (seed 42) — results in results/small_sweep_en/. Do not re-run it;
+    # it's kept here only for reproducibility. The active target is "fairspeech".
     "cv22": {
         "hf_dataset_path": "data/cv22_hf/en",
         "demographic_source": "cv22_tsv",
@@ -105,7 +108,14 @@ def parse_args():
                         "Prefer CUDA_VISIBLE_DEVICES=N instead so each child sees just one GPU.")
     p.add_argument("--n_bootstrap", type=int, default=1000)
     p.add_argument("--cv_test_tsv", type=Path, default=None)
-    p.add_argument("--per_seed_dir", type=Path, default=None)
+    p.add_argument("--per_seed_dir", type=Path, default=None,
+                   help="Override where per-gender/multi-axis summary CSVs are written. "
+                        "Set this to a dataset-specific folder so a Fair-Speech sweep doesn't "
+                        "clobber a CV22 sweep that uses the same d{NN}_keep{NN} condition names.")
+    p.add_argument("--per_utt_dir", type=Path, default=None,
+                   help="Override where per-utterance CSVs are written (one per depth, named "
+                        "{condition}_seed{seed}.csv). Like --per_seed_dir, set this per dataset to "
+                        "avoid filename collisions across sweeps.")
     p.add_argument("--continue_on_error", action="store_true",
                    help="Don't stop the sweep when one depth fails.")
     p.add_argument("--dry_run", action="store_true",
@@ -217,6 +227,8 @@ def main():
             cmd += ["--cv_test_tsv", str(args.cv_test_tsv)]
         if args.per_seed_dir:
             cmd += ["--per_seed_dir", str(args.per_seed_dir)]
+        if args.per_utt_dir:
+            cmd += ["--output_path", str(args.per_utt_dir / f"{p_['condition']}_seed{args.seed}.csv")]
         if args.device:
             cmd += ["--device", args.device]
 
