@@ -25,19 +25,12 @@ notebooks/
 
 todo.md
 
-# Server-generated experiment outputs. These are reproducible from the
-# checkpoint + test split via experiments/bias_pruning/scripts/evaluate_subgroup_wer.py,
-# so keeping them out of git avoids merge conflicts when a server run
-# overwrites the laptop's copies. The directories themselves are kept via
-# .gitkeep so `compare_conditions.py` has somewhere to drop new outputs.
-experiments/bias_pruning/results/per_utterance/*.csv
-experiments/bias_pruning/results/per_seed_wer/*.csv
-!experiments/bias_pruning/results/per_utterance/.gitkeep
-!experiments/bias_pruning/results/per_seed_wer/.gitkeep
-
-# Comparison-level outputs ARE committed (final_comparison.csv,
-# disparity_metrics.csv, paired_bootstrap.csv, comparison_plot.png) —
-# those are the human-readable results referenced in summary.md.
-# Restricted-license datasets (Fair-Speech etc.) must never have their
-# transcripts redistributed. The general per_utterance/*.csv rule above
-# already blocks them.
+# All experiment outputs stay local. Scripts and the interpretive
+# summary.md are tracked; everything that lands under
+# experiments/bias_pruning/results/ (per-utterance CSVs, per-seed
+# summaries, comparison tables, plots, descriptive tables) is not.
+# Both evaluate_subgroup_wer.py and compare_conditions.py create
+# subdirs as needed, so the folder doesn't need to exist in git.
+# This also forecloses any chance of a Fair-Speech / CORAAL /
+# L2-ARCTIC transcript ending up in a committed CSV.
+experiments/bias_pruning/results/
