@@ -52,20 +52,23 @@ def parse_depth(path: Path) -> int:
     return int(m.group(1))
 
 
-def load_multiaxis_file(path: Path) -> list[dict]:
+def load_multiaxis_file(path: Path) -> list[dict] | None:
+    """Load a multi-axis CSV, or return None if the file is a legacy gender-only
+    summary (no 'axis' column) — so a per_axis/ folder holding BOTH file types
+    can be pointed at directly without crashing."""
     with open(path, "r", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         if reader.fieldnames is None or "axis" not in reader.fieldnames:
-            raise SystemExit(
-                f"{path.name} is not a multi-axis file (no 'axis' column). "
-                "Use aggregate_depth_sweep.py for legacy gender-only files."
-            )
+            return None
         rows = list(reader)
     for r in rows:
         r["n_utts"] = int(r["n_utts"])
         for k in _NUMERIC_FIELDS:
             v = r.get(k, "")
-            r[k] = float(v) if v not in ("", None) else float("nan")
+            try:
+                r[k] = float(v)
+            except (TypeError, ValueError):
+                r[k] = float("nan")  # handles "", "null", "nan" (wandb JSON export)
     return rows
 
 
@@ -76,10 +79,23 @@ def load_sweep(in_dir: Path) -> tuple[dict[int, list[dict]], list[str]]:
         raise SystemExit(f"No d*.csv multi-axis files found in {in_dir}")
     by_depth: dict[int, list[dict]] = {}
     axes: set[str] = set()
+    skipped: list[str] = []
     for f in files:
         rows = load_multiaxis_file(f)
+        if rows is None:  # legacy gender-only summary sharing the folder
+            skipped.append(f.name)
+            continue
         by_depth[parse_depth(f)] = rows
         axes.update(r["axis"] for r in rows)
+    if not by_depth:
+        raise SystemExit(
+            f"No multi-axis files (with an 'axis' column) found in {in_dir}. "
+            f"Skipped {len(skipped)} non-multiaxis file(s). The sweep must run the "
+            "multi-axis eval code (post the Fair-Speech commit) to produce *_multiaxis.csv."
+        )
+    if skipped:
+        print(f"[Multiaxis] Skipped {len(skipped)} non-multiaxis file(s) in folder "
+              f"(e.g. {skipped[:3]}).")
     return by_depth, sorted(axes)
 
 

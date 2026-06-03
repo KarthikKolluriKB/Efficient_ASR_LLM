@@ -63,7 +63,10 @@ def load_depth_file(path: Path) -> dict[str, dict]:
         r["n_utts"] = int(r["n_utts"])
         for k in _NUMERIC_FIELDS:
             v = r.get(k, "")
-            r[k] = float(v) if v not in ("", None) else float("nan")
+            try:
+                r[k] = float(v)
+            except (TypeError, ValueError):
+                r[k] = float("nan")  # handles "", "null", "nan" (wandb JSON export)
         out[r["gender"]] = r
     return out
 
@@ -148,7 +151,8 @@ def write_findings_md(records: list[dict], path: Path) -> None:
 
 
 def make_plot(records: list[dict], out_path: Path, total_layers: int,
-              collapse_wer: float = 1.0) -> None:
+              collapse_wer: float = 1.0,
+              dataset_label: str = "CommonVoice 22 English") -> None:
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -198,7 +202,7 @@ def make_plot(records: list[dict], out_path: Path, total_layers: int,
         ax.legend(title="gender", fontsize=9)
 
     fig.suptitle(
-        "Whisper-small SLAM-ASR depth sweep — CommonVoice 22 English (seed 42, "
+        f"Whisper-small SLAM-ASR depth sweep — {dataset_label} (seed 42, "
         "one checkpoint per depth)\nCI bands = per-group utterance bootstrap (male/female)",
         fontsize=11,
     )
@@ -216,6 +220,8 @@ def parse_args():
     p.add_argument("--out_dir", type=Path, default=DEFAULT_OUT)
     p.add_argument("--total_layers", type=int, default=12,
                    help="Total encoder layers (whisper-small=12). Used for 'layers kept'.")
+    p.add_argument("--dataset_label", type=str, default="CommonVoice 22 English",
+                   help="Dataset name shown in the plot title (e.g. 'L2-ARCTIC (non-native English)').")
     return p.parse_args()
 
 
@@ -228,7 +234,8 @@ def main():
     print(f"[Aggregate] Wrote table CSV: {args.out_dir / 'depth_sweep_findings.csv'}")
     write_findings_md(records, args.out_dir / "depth_sweep_findings.md")
     print(f"[Aggregate] Wrote table MD:  {args.out_dir / 'depth_sweep_findings.md'}")
-    make_plot(records, args.out_dir / "depth_sweep_plot.png", args.total_layers)
+    make_plot(records, args.out_dir / "depth_sweep_plot.png", args.total_layers,
+              dataset_label=args.dataset_label)
 
     # Console summary
     print(f"\n{'depth':>5} {'kept':>4} {'WER_all':>8} {'WER_m':>7} {'WER_f':>7} "
