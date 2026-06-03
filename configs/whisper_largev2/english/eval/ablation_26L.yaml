@@ -1,5 +1,5 @@
 # =============================================================================
-# Evaluation Config - Whisper-large-v2 (6 Layers kept; top 26 layers pruned)
+# Evaluation Config - Whisper-large-v2 (26 Layers kept; top 6 layers pruned)
 # =============================================================================
 # Usage:
 #   python eval.py --config configs/eval_baseline.yaml
@@ -27,7 +27,7 @@ model:
   encoder_ds_rate: 2
   encoder_model_path: null
   encoder_dim: 1280
-  encoder_num_layers: 6       
+  encoder_num_layers: 26       
   
   # Projector settings
   projector: concatLinear
@@ -43,7 +43,7 @@ model:
 # -----------------------------------------------------------------------------
 eval:
   # Checkpoint path (can be overridden via CLI --ckpt_path)
-  projector_path: outputs/english/whisper-largev2/baseline_6L/checkpoint_best_wer.pt
+  projector_path: outputs/english/whisper-largev2/baseline_26L/checkpoint_best_wer.pt
   
   # Batch size (smaller than training due to beam search memory)
   batch_size: 32
@@ -58,7 +58,7 @@ eval:
   do_sample: false               # Use sampling (False=deterministic beam search)
   
   # Output settings
-  output_dir: outputs/english/whisper-largev2/baseline_6L/eval/
+  output_dir: outputs/english/whisper-largev2/baseline_26L/eval/
   save_predictions: true
 
 # -----------------------------------------------------------------------------
@@ -69,7 +69,7 @@ train:
   batch_size: 16
   val_batch_size: 16
   num_workers: 4
-  output_dir: outputs/english/whisper-largev2/baseline_6L/
+  output_dir: outputs/english/whisper-largev2/baseline_26L/
   freeze_llm: true
   freeze_encoder: true
   mixed_precision: true
@@ -106,6 +106,6 @@ log:
   wandb_dir: ./wandb
   wandb_entity_name: null
   wandb_project_name: SLAM_ASR_whisper_largev2_English
-  wandb_exp_name: whisper-largev2_baseline_6L
+  wandb_exp_name: whisper-largev2_baseline_26L
   log_dir: ./logs
-  log_filename: eval_ablation_6L_en.log
+  log_filename: eval_ablation_26L_en.log
