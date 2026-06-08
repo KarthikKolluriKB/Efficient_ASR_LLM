@@ -185,7 +185,8 @@ def write_wide_md(depths, ordered_plot, table, axis, total_layers, path: Path):
     path.write_text("\n".join(md) + "\n", encoding="utf-8")
 
 
-def make_plot(depths, ordered_plot, table, axis, total_layers, path: Path):
+def make_plot(depths, ordered_plot, table, axis, total_layers, path: Path,
+              dataset_label: str = "depth sweep"):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -228,7 +229,7 @@ def make_plot(depths, ordered_plot, table, axis, total_layers, path: Path):
         ax.set_title(f"{label.split()[0]} vs depth by {axis}")
         ax.grid(True, axis="y", alpha=0.25)
         ax.legend(title=axis, fontsize=8, ncol=2)
-    fig.suptitle(f"Fair-Speech depth sweep — WER/CER by {axis} (seed 42, one checkpoint per depth)",
+    fig.suptitle(f"{dataset_label} — WER/CER by {axis} (seed 42, one checkpoint per depth)",
                  fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -245,6 +246,8 @@ def parse_args():
     p.add_argument("--axes", nargs="+", default=None,
                    help="Axes to aggregate (default: all axes present in the files).")
     p.add_argument("--total_layers", type=int, default=12)
+    p.add_argument("--dataset_label", type=str, default="Whisper-small depth sweep",
+                   help="Dataset name shown in the plot title (e.g. 'L2-ARCTIC (non-native English)').")
     return p.parse_args()
 
 
@@ -267,7 +270,7 @@ def main():
         write_wide_md(depths, ordered_plot, table, axis, args.total_layers,
                       args.out_dir / f"findings_{axis}.md")
         make_plot(depths, ordered_plot, table, axis, args.total_layers,
-                  args.out_dir / f"plot_{axis}.png")
+                  args.out_dir / f"plot_{axis}.png", dataset_label=args.dataset_label)
         dropped = [g for g in ordered_all if g not in ordered_plot]
         print(f"[Multiaxis] axis={axis}: {len(ordered_plot)} plotted group(s) "
               f"{ordered_plot}" + (f"; under-powered (CSV only): {dropped}" if dropped else ""))

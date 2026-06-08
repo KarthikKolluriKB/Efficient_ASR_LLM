@@ -564,6 +564,9 @@ def parse_args():
                    help="Per-utterance results CSV. Default: experiments/bias_pruning/results/per_utterance/{condition}_{seed}.csv")
     p.add_argument("--per_seed_dir", type=Path, default=DEFAULT_PER_SEED_DIR)
     p.add_argument("--n_bootstrap", type=int, default=1000)
+    p.add_argument("--batch_size", type=int, default=None,
+                   help="Override eval.batch_size from the YAML config (e.g. raise it for "
+                        "smaller models that under-use the GPU). If unset, uses the config value.")
     p.add_argument("--target_wer", type=float, default=None,
                    help="Paper 1's reported aggregate WER for this condition (0-1 scale). "
                         "If provided, the script exits non-zero when the gap exceeds 0.005 (0.5 abs pts).")
@@ -670,6 +673,13 @@ def main():
         # reused across datasets. The data loader reads cfg.data.hf_dataset_path.
         cfg.data.hf_dataset_path = str(args.hf_dataset_path)
         print(f"[Eval] Override: cfg.data.hf_dataset_path = {cfg.data.hf_dataset_path}")
+    if args.batch_size is not None:
+        # Override the YAML's eval.batch_size. force_add handles configs that
+        # lack an eval.batch_size key. Batch size affects only speed/memory, not
+        # the per-utterance hypotheses (greedy/beam decoding is deterministic
+        # given correct attention masking).
+        OmegaConf.update(cfg, "eval.batch_size", args.batch_size, force_add=True)
+        print(f"[Eval] Override: cfg.eval.batch_size = {args.batch_size}")
     device = torch.device(args.device)
 
     use_wandb, wandb_project, wandb_run_name = _resolve_wandb_settings(cfg, args)

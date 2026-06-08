@@ -107,6 +107,9 @@ def parse_args():
                    help="Pass to evaluate_subgroup_wer.py. If unset, that script picks its own default. "
                         "Prefer CUDA_VISIBLE_DEVICES=N instead so each child sees just one GPU.")
     p.add_argument("--n_bootstrap", type=int, default=1000)
+    p.add_argument("--batch_size", type=int, default=None,
+                   help="Override eval.batch_size for every depth (raise it for smaller "
+                        "models to use the GPU better). Passed through to evaluate_subgroup_wer.py.")
     p.add_argument("--cv_test_tsv", type=Path, default=None)
     p.add_argument("--per_seed_dir", type=Path, default=None,
                    help="Override where per-gender/multi-axis summary CSVs are written. "
@@ -229,6 +232,8 @@ def main():
             cmd += ["--per_seed_dir", str(args.per_seed_dir)]
         if args.per_utt_dir:
             cmd += ["--output_path", str(args.per_utt_dir / f"{p_['condition']}_seed{args.seed}.csv")]
+        if args.batch_size:
+            cmd += ["--batch_size", str(args.batch_size)]
         if args.device:
             cmd += ["--device", args.device]
 
