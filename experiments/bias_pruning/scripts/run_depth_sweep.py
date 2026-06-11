@@ -60,6 +60,25 @@ DATASETS = {
         "wandb_project_default": "whisper_small_bias_sweep_en",
         "tag_suffix": "cv22",
     },
+    # Danish / Dutch Common Voice — for the cross-lingual (low-resource) equity
+    # angle. Same cv22_tsv demographic join (gender/age/accent only; CV never
+    # collected race/SES), but you MUST pass --cv_test_tsv pointing at the
+    # matching-language transcript/<lang>/test.tsv (the auto-download default is
+    # English-only). hf_dataset_path assumes the da/nl HF builds live alongside en.
+    "cv22_da": {
+        "hf_dataset_path": "data/cv22_hf/da",
+        "demographic_source": "cv22_tsv",
+        "demographic_columns": None,
+        "wandb_project_default": "whisper_bias_sweep_da",
+        "tag_suffix": "cv22_da",
+    },
+    "cv22_nl": {
+        "hf_dataset_path": "data/cv22_hf/nl",
+        "demographic_source": "cv22_tsv",
+        "demographic_columns": None,
+        "wandb_project_default": "whisper_bias_sweep_nl",
+        "tag_suffix": "cv22_nl",
+    },
     "l2arctic": {
         "hf_dataset_path": "data/l2arctic_hf",
         "demographic_source": "hf_columns",
