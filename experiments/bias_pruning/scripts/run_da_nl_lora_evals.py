@@ -47,24 +47,27 @@ LANGS = [
          wandb="whisper_bias_sweep_nl_lora"),
 ]
 
-# One entry per model scale. Depth lists mirror the base da/nl sweeps; the
-# existence check trims any depth whose checkpoint wasn't trained.
+# One entry per model scale. Verified against the actual server layout (2026-07):
+# the DA/NL LoRA layout is per-scale INCONSISTENT, so each scale carries its own
+# baseline/ablation path builders. large-v2 DA/NL LoRA has 0 ablation checkpoints
+# (never trained) and is therefore EXCLUDED — add it back only after training.
+#   medium: outputs/whisper-medium/{lang}/{baseline_lora|ablation_{k}L_lora}/checkpoint_best_wer.pt
+#   small:  outputs/whisper_small/{lang}/LoRA/whisper-s_{baseline_lora_final|ablation_{k}L_lora_final}/checkpoint_best_wer.pt
 SCALES = [
-    dict(scale="largev2", stub="whisper-largev2", total_layers=32, batch=48,
-         depths=[0, 2, 4, 6, 8, 10, 12, 14, 16], acase="l"),   # ablation_{k}l_lora
-    dict(scale="medium",  stub="whisper-medium",  total_layers=24, batch=64,
-         depths=[0, 2, 4, 6, 8, 10, 12, 14, 16], acase="L"),   # ablation_{k}L_lora
-    dict(scale="small",   stub="whisper-small",   total_layers=12, batch=64,
-         depths=list(range(0, 12)),               acase="L"),
+    dict(scale="medium", total_layers=24, batch=64,
+         depths=[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22],
+         base=lambda ld: f"outputs/whisper-medium/{ld}/baseline_lora/checkpoint_best_wer.pt",
+         abl=lambda ld, k: f"outputs/whisper-medium/{ld}/ablation_{k}L_lora/checkpoint_best_wer.pt"),
+    dict(scale="small", total_layers=12, batch=64,
+         depths=list(range(0, 12)),
+         base=lambda ld: f"outputs/whisper_small/{ld}/LoRA/whisper-s_baseline_lora_final/checkpoint_best_wer.pt",
+         abl=lambda ld, k: f"outputs/whisper_small/{ld}/LoRA/whisper-s_ablation_{k}L_lora_final/checkpoint_best_wer.pt"),
 ]
 
 # ========================= CONFIG 2: checkpoint paths =========================
 def ckpt_path(langdir: str, sc: dict, keep: int, baseline: bool) -> str:
-    """Resolve a DA/NL LoRA checkpoint path. Edit here if the layout differs."""
-    root = f"outputs/{langdir}/{sc['stub']}"
-    if baseline:
-        return f"{root}/baseline_lora/checkpoint_best_wer.pt"
-    return f"{root}/ablation_{keep}{sc['acase']}_lora/checkpoint_best_wer.pt"
+    """Resolve a DA/NL LoRA checkpoint path via the scale's own builders."""
+    return sc["base"](langdir) if baseline else sc["abl"](langdir, keep)
 
 
 def build_jobs():
