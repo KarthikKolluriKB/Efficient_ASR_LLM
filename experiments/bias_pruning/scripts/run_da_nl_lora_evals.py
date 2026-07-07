@@ -47,13 +47,21 @@ LANGS = [
          wandb="whisper_bias_sweep_nl_lora"),
 ]
 
-# One entry per model scale. Verified against the actual server layout (2026-07):
-# the DA/NL LoRA layout is per-scale INCONSISTENT, so each scale carries its own
-# baseline/ablation path builders. large-v2 DA/NL LoRA has 0 ablation checkpoints
-# (never trained) and is therefore EXCLUDED — add it back only after training.
-#   medium: outputs/whisper-medium/{lang}/{baseline_lora|ablation_{k}L_lora}/checkpoint_best_wer.pt
-#   small:  outputs/whisper_small/{lang}/LoRA/whisper-s_{baseline_lora_final|ablation_{k}L_lora_final}/checkpoint_best_wer.pt
+# One entry per model scale. Verified against the actual server layout (2026-07).
+# The DA/NL LoRA layout is per-scale AND per-language inconsistent, so each scale
+# carries its own baseline/ablation path builders (large-v2's ablation builder
+# branches on language). Checkpoint file is checkpoint_best_wer.pt throughout.
+#   large-v2 danish: outputs/whisper_largev2/danish/{baseline_LoRA|ablation_{k}L_LoRA}/...
+#   large-v2 dutch:  outputs/whisper_largev2/dutch/{baseline_LoRA|baseline_LoRA_{k}L}/...
+#   medium:          outputs/whisper-medium/{lang}/{baseline_lora|ablation_{k}L_lora}/...
+#   small:           outputs/whisper_small/{lang}/LoRA/whisper-s_{baseline_lora_final|ablation_{k}L_lora_final}/...
 SCALES = [
+    dict(scale="largev2", total_layers=32, batch=48,
+         depths=[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30],
+         base=lambda ld: f"outputs/whisper_largev2/{ld}/baseline_LoRA/checkpoint_best_wer.pt",
+         abl=lambda ld, k: (
+             f"outputs/whisper_largev2/danish/ablation_{k}L_LoRA/checkpoint_best_wer.pt" if ld == "danish"
+             else f"outputs/whisper_largev2/dutch/baseline_LoRA_{k}L/checkpoint_best_wer.pt")),
     dict(scale="medium", total_layers=24, batch=64,
          depths=[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22],
          base=lambda ld: f"outputs/whisper-medium/{ld}/baseline_lora/checkpoint_best_wer.pt",
