@@ -78,6 +78,7 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     all_wer_scores = []
     all_cer_scores = []
     all_hyp_texts, all_ref_texts = [], []
+    all_utt_losses = []  # per-utterance val losses (only when cvar_alpha < 1.0)
     
     use_autocast = bool(cfg.train.mixed_precision and torch.cuda.is_available())
     amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
@@ -165,7 +166,12 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
                 total_loss += model_outputs.loss.item()
             if "acc" in metrics:
                 all_accuracies.append(metrics["acc"])
-            
+
+            # Per-utterance losses for tail (CVaR) validation metric
+            utt_losses = getattr(model_outputs, "per_utterance_loss", None)
+            if utt_losses is not None:
+                all_utt_losses.extend(utt_losses.detach().float().cpu().tolist())
+
             del model_outputs
             
             # Generate for WER
@@ -232,10 +238,20 @@ def evaluate(cfg, model, dataloader, device, enc_dtype, tokenizer):
     val_wer_score = sum(all_wer_scores) / max(len(all_wer_scores), 1) if all_wer_scores else 1.0
     val_cer_score = sum(all_cer_scores) / max(len(all_cer_scores), 1) if all_cer_scores else 1.0
     val_word_acc = 1.0 - val_wer_score if val_wer_score <= 1.0 else 0.0
-    
+
+    # Tail (CVaR) validation loss: mean of the worst alpha-fraction of
+    # per-utterance losses over the whole val set (de-averaged checkpoint
+    # selection, RQ3). None when cvar_alpha is disabled.
+    val_tail_loss = None
+    if all_utt_losses:
+        alpha = float(cfg.train.get("cvar_alpha", 1.0))
+        sorted_losses = sorted(all_utt_losses, reverse=True)
+        k = max(1, math.ceil(alpha * len(sorted_losses)))
+        val_tail_loss = sum(sorted_losses[:k]) / k
+
     model.train()
-    
-    return val_loss, val_acc, val_wer_score, val_cer_score, val_word_acc, all_hyp_texts, all_ref_texts
+
+    return val_loss, val_acc, val_wer_score, val_cer_score, val_word_acc, all_hyp_texts, all_ref_texts, val_tail_loss
 
 
 def print_trainable_parameters(model, logger):
@@ -468,6 +484,7 @@ def main():
     best_val_wer = float("inf")
     best_val_cer = float("inf")
     best_train_wer = float("inf")
+    best_val_tail_loss = float("inf")
     best_val_path = None
     training_start_time = time.time()
 
@@ -559,22 +576,26 @@ def main():
         # ==========================================================================
         # VALIDATION
         # ==========================================================================
-        val_loss, val_acc, val_wer, val_cer, val_word_acc, hyp_texts, ref_texts = evaluate(
+        val_loss, val_acc, val_wer, val_cer, val_word_acc, hyp_texts, ref_texts, val_tail_loss = evaluate(
             cfg, model, val_dataloader, device, enc_dtype, tokenizer
         )
-        
+
         if val_cer < best_val_cer:
             best_val_cer = val_cer
-        
-        logger.info(f"Epoch {epoch} | Val WER: {val_wer:.4f} | Val CER: {val_cer:.4f} | Val Loss: {val_loss:.4f}")
-        
-        if run is not None: 
-            run.log({
+
+        tail_msg = f" | Val Tail Loss: {val_tail_loss:.4f}" if val_tail_loss is not None else ""
+        logger.info(f"Epoch {epoch} | Val WER: {val_wer:.4f} | Val CER: {val_cer:.4f} | Val Loss: {val_loss:.4f}{tail_msg}")
+
+        if run is not None:
+            val_log = {
                 "val/wer": val_wer,
                 "val/cer": val_cer,
                 "val/loss": val_loss,
                 "val/acc": val_acc,
-            }, step=global_step)
+            }
+            if val_tail_loss is not None:
+                val_log["val/tail_loss"] = val_tail_loss
+            run.log(val_log, step=global_step)
 
         # Save examples
         save_and_print_examples(
@@ -588,12 +609,30 @@ def main():
             seed=cfg.train.seed
         )
 
-        # Save best model
+        # Save best model.
+        # checkpoint_monitor: "val_wer" (default, aggregate) or "tail_loss"
+        # (de-averaged checkpoint selection, RQ3 — best CVaR val loss instead
+        # of best aggregate WER; requires cvar_alpha < 1.0). The file keeps the
+        # checkpoint_best_wer.pt name so all downstream eval scripts still work.
+        ckpt_monitor = cfg.train.get("checkpoint_monitor", "val_wer")
+        if ckpt_monitor == "tail_loss" and val_tail_loss is not None:
+            is_best = val_tail_loss < best_val_tail_loss
+        else:
+            is_best = val_wer < best_val_wer
+
         if val_wer < best_val_wer:
             best_val_wer = val_wer
+        if val_tail_loss is not None and val_tail_loss < best_val_tail_loss:
+            best_val_tail_loss = val_tail_loss
+
+        if is_best:
             best_val_path = os.path.join(cfg.train.output_dir, "checkpoint_best_wer.pt")
             save_checkpoint(model, best_val_path, global_step, save_lora=use_lora)
-            logger.info(f"New best model! WER={best_val_wer:.4f} -> {best_val_path}")
+            logger.info(
+                f"New best model ({ckpt_monitor})! WER={val_wer:.4f}"
+                + (f" TailLoss={val_tail_loss:.4f}" if val_tail_loss is not None else "")
+                + f" -> {best_val_path}"
+            )
             
             if use_lora:
                 try:

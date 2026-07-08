@@ -23,6 +23,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 
 from models.encoder import WhisperWrappedEncoder
+from models.losses import sequence_cvar_ce
 from utils.metrics import compute_accuracy, compute_wer, decode_texts_from_outputs
 from utils.train_utils import print_model_size, print_module_size
 
@@ -276,6 +277,15 @@ class ASRLLM(nn.Module):
         if self.label_smoothing > 0:
             logger.info(f"Label smoothing enabled: {self.label_smoothing}")
 
+        # Batch-CVaR recovery loss (RQ3 "de-averaged pruning"): backprop only
+        # the worst cvar_alpha-fraction of per-utterance losses per batch.
+        # cvar_alpha = 1.0 (default) keeps the standard mean CE.
+        self.cvar_alpha = float(getattr(train_config, 'cvar_alpha', 1.0))
+        if not 0.0 < self.cvar_alpha <= 1.0:
+            raise ValueError(f"cvar_alpha must be in (0, 1], got {self.cvar_alpha}")
+        if self.cvar_alpha < 1.0:
+            logger.info(f"Batch-CVaR loss enabled: alpha={self.cvar_alpha}")
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -352,28 +362,41 @@ class ASRLLM(nn.Module):
             return inputs_embeds, attention_mask
 
         # 5. Forward through LLM
-        if self.label_smoothing > 0 and labels is not None:
-            # Compute loss with label smoothing
+        if labels is not None and (self.label_smoothing > 0 or self.cvar_alpha < 1.0):
+            # Explicit loss branch (label smoothing and/or batch-CVaR)
             model_outputs = self.llm(
-                inputs_embeds=inputs_embeds, 
-                attention_mask=attention_mask, 
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
                 labels=None,
                 use_cache=False
             )
-            
+
             logits = model_outputs.logits
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            
-            loss_fct = CrossEntropyLoss(
-                ignore_index=-100, 
-                label_smoothing=self.label_smoothing
-            )
-            loss = loss_fct(
-                shift_logits.view(-1, shift_logits.size(-1)), 
-                shift_labels.view(-1)
-            )
-            model_outputs.loss = loss
+
+            if self.cvar_alpha < 1.0:
+                # Batch-CVaR: mean CE over only the worst alpha-fraction of
+                # utterances; per-utterance losses exposed for tail-based
+                # validation / checkpoint selection.
+                loss, utt_losses = sequence_cvar_ce(
+                    logits, labels,
+                    alpha=self.cvar_alpha,
+                    label_smoothing=self.label_smoothing,
+                )
+                model_outputs.loss = loss
+                model_outputs.per_utterance_loss = utt_losses
+            else:
+                shift_logits = logits[..., :-1, :].contiguous()
+                shift_labels = labels[..., 1:].contiguous()
+
+                loss_fct = CrossEntropyLoss(
+                    ignore_index=-100,
+                    label_smoothing=self.label_smoothing
+                )
+                loss = loss_fct(
+                    shift_logits.view(-1, shift_logits.size(-1)),
+                    shift_labels.view(-1)
+                )
+                model_outputs.loss = loss
         else:
             model_outputs = self.llm(
                 inputs_embeds=inputs_embeds, 
