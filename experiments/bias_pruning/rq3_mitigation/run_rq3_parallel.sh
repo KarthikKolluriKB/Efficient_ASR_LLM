@@ -118,6 +118,33 @@ for c in "${ALL_RUNS[@]}"; do
 done
 [ "$missing" -eq 0 ] || { echo "Aborting: fix missing configs above."; exit 1; }
 
+# --- clean: kill leftover trainings + remove ONLY the CVaR output dirs --------
+# Guarded to paths containing "cvar", so the mean-CE baselines (ablation_30L/,
+# ablation_28L/, ablation_30l_lora/) can never be touched.
+if [ "${1:-}" = "clean" ]; then
+  say "clean: stopping any running RQ3 trainings"
+  if pkill -f "train.py --config configs/whisper_largev2/english" 2>/dev/null; then
+    say "  sent SIGTERM to train.py process(es); waiting 3s"; sleep 3
+  else
+    say "  no matching train.py process running"
+  fi
+  for c in "${ALL_RUNS[@]}"; do
+    outdir="$(outdir_of "$c")"
+    if [[ "$outdir" != *cvar* ]]; then
+      say "  REFUSING to remove non-CVaR dir: $outdir (skipped)"; continue
+    fi
+    if [ -d "$outdir" ]; then
+      echo "  removing $outdir  (contents:)"; ls -1 "$outdir" 2>/dev/null | sed 's/^/      /'
+      rm -rf "$outdir"
+    else
+      echo "  (already absent) $outdir"
+    fi
+  done
+  rm -f "$LOG_DIR"/gpu*cvar*.log
+  say "clean complete. Relaunch with:  CONCURRENT=1 bash $0"
+  exit 0
+fi
+
 echo "============================================================"
 echo " RQ3 parallel training plan   (repo: $REPO_ROOT)"
 echo "============================================================"
