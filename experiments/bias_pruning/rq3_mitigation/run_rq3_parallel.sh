@@ -34,6 +34,12 @@ cd "$REPO_ROOT"
 GPU0="${GPU0:-0}"
 GPU1="${GPU1:-1}"
 FORCE="${FORCE:-0}"
+# CONCURRENT=1 runs BOTH jobs on a GPU at the same time (2 per card, 4 total).
+# Default 0 = sequential within a lane (one job per card at a time).
+CONCURRENT="${CONCURRENT:-0}"
+# seconds to wait before starting the 2nd job on each card, so the two model
+# loads don't peak host RAM / GPU transfer simultaneously.
+STAGGER="${STAGGER:-60}"
 
 LOG_DIR="logs/rq3"
 mkdir -p "$LOG_DIR"
@@ -62,31 +68,46 @@ tag_of() {
   echo "$1" | sed -e 's#configs/whisper_largev2/english/##' -e 's#\.yaml$##' -e 's#/#_#g'
 }
 
-# --- run one lane: a GPU id followed by its config list -----------------------
+# Start one training run in the background. Sets LAST_PID on launch.
+# Returns 1 (and starts nothing) if the run is already complete.
+LAST_PID=""
+launch_one() {
+  local gpu="$1" cfg="$2"
+  local tag log outdir
+  tag="$(tag_of "$cfg")"
+  log="$LOG_DIR/gpu${gpu}_${tag}.log"
+  outdir="$(outdir_of "$cfg")"
+  if [ "$FORCE" != "1" ] && [ -f "${outdir%/}/checkpoint_best_wer.pt" ]; then
+    say "GPU$gpu SKIP  $tag (checkpoint exists at $outdir; set FORCE=1 to retrain)"
+    return 1
+  fi
+  say "GPU$gpu START $tag  (cfg=$cfg -> $log)"
+  CUDA_VISIBLE_DEVICES="$gpu" python train.py --config "$cfg" > "$log" 2>&1 &
+  LAST_PID=$!
+  return 0
+}
+
+# --- sequential lane: run its configs one at a time --------------------------
 run_lane() {
   local gpu="$1"; shift
   local configs=("$@")
-  local cfg tag log outdir rc
+  local cfg rc
   for cfg in "${configs[@]}"; do
-    tag="$(tag_of "$cfg")"
-    log="$LOG_DIR/gpu${gpu}_${tag}.log"
-    outdir="$(outdir_of "$cfg")"
-
-    if [ "$FORCE" != "1" ] && [ -f "${outdir%/}/checkpoint_best_wer.pt" ]; then
-      say "GPU$gpu SKIP  $tag (checkpoint exists at $outdir; set FORCE=1 to retrain)"
-      continue
-    fi
-
-    say "GPU$gpu START $tag  (cfg=$cfg -> $log)"
-    CUDA_VISIBLE_DEVICES="$gpu" python train.py --config "$cfg" > "$log" 2>&1
-    rc=$?
-    if [ "$rc" -eq 0 ]; then
-      say "GPU$gpu DONE  $tag"
-    else
-      say "GPU$gpu FAIL  $tag (exit $rc) — see $log; continuing lane"
+    if launch_one "$gpu" "$cfg"; then
+      wait "$LAST_PID"; rc=$?
+      if [ "$rc" -eq 0 ]; then say "GPU$gpu DONE  $(tag_of "$cfg")"
+      else say "GPU$gpu FAIL  $(tag_of "$cfg") (exit $rc) — see log; continuing lane"; fi
     fi
   done
   say "GPU$gpu lane complete"
+}
+
+# --- concurrent: launch every run at once (2 per card), collect pids ---------
+ALL_PIDS=(); ALL_TAGS=()
+maybe_launch() {   # gpu cfg
+  if launch_one "$1" "$2"; then
+    ALL_PIDS+=("$LAST_PID"); ALL_TAGS+=("$(tag_of "$2")")
+  fi
 }
 
 # --- preflight ----------------------------------------------------------------
@@ -102,6 +123,7 @@ echo " RQ3 parallel training plan   (repo: $REPO_ROOT)"
 echo "============================================================"
 printf " GPU %s lane:\n" "$GPU0"; for c in "${GPU0_RUNS[@]}"; do printf "    - %s  -> %s\n" "$(basename "$c")" "$(outdir_of "$c")"; done
 printf " GPU %s lane:\n" "$GPU1"; for c in "${GPU1_RUNS[@]}"; do printf "    - %s  -> %s\n" "$(basename "$c")" "$(outdir_of "$c")"; done
+echo " MODE=$([ "$CONCURRENT" = 1 ] && echo 'CONCURRENT (2 runs/GPU at once)' || echo 'SEQUENTIAL (1 run/GPU at a time)')"
 echo " FORCE=$FORCE (1=retrain completed runs, 0=skip them)"
 echo "============================================================"
 
@@ -127,17 +149,34 @@ fi
 
 command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv
 
-# --- launch both lanes in parallel -------------------------------------------
-say "launching GPU$GPU0 and GPU$GPU1 lanes"
-run_lane "$GPU0" "${GPU0_RUNS[@]}" &
-PID0=$!
-run_lane "$GPU1" "${GPU1_RUNS[@]}" &
-PID1=$!
+# kill every training child we launched, regardless of mode
+trap 'echo; say "interrupted — stopping all training"; pkill -f "train.py --config configs/whisper_largev2/english" 2>/dev/null; exit 130' INT TERM
 
-trap 'echo; say "interrupted — stopping training"; pkill -P $PID0 2>/dev/null; pkill -P $PID1 2>/dev/null; kill $PID0 $PID1 2>/dev/null; exit 130' INT TERM
-
-wait "$PID0"
-wait "$PID1"
+if [ "$CONCURRENT" = "1" ]; then
+  say "CONCURRENT mode: 2 runs per GPU at once (stagger ${STAGGER}s, ~11GB each of 48GB)"
+  # index 0 = first job on each card, index 1 = second job on each card
+  n0=${#GPU0_RUNS[@]}; n1=${#GPU1_RUNS[@]}
+  maxlen=$(( n0 > n1 ? n0 : n1 ))
+  for idx in $(seq 0 $((maxlen - 1))); do
+    if [ "$idx" -gt 0 ]; then say "stagger ${STAGGER}s before next job on each card"; sleep "$STAGGER"; fi
+    [ "$idx" -lt "$n0" ] && maybe_launch "$GPU0" "${GPU0_RUNS[$idx]}"
+    [ "$idx" -lt "$n1" ] && maybe_launch "$GPU1" "${GPU1_RUNS[$idx]}"
+  done
+  say "all ${#ALL_PIDS[@]} runs launched; waiting for completion"
+  for i in "${!ALL_PIDS[@]}"; do
+    wait "${ALL_PIDS[$i]}"; rc=$?
+    if [ "$rc" -eq 0 ]; then say "DONE  ${ALL_TAGS[$i]}"
+    else say "FAIL  ${ALL_TAGS[$i]} (exit $rc) — see log"; fi
+  done
+else
+  say "SEQUENTIAL mode: 1 run per GPU at a time (set CONCURRENT=1 for 2 per GPU)"
+  run_lane "$GPU0" "${GPU0_RUNS[@]}" &
+  PID0=$!
+  run_lane "$GPU1" "${GPU1_RUNS[@]}" &
+  PID1=$!
+  wait "$PID0"
+  wait "$PID1"
+fi
 
 # --- summary ------------------------------------------------------------------
 echo
