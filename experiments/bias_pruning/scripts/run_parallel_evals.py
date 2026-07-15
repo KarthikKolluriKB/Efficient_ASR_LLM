@@ -66,31 +66,33 @@ def cfg(scale, lang, depth):
 #   whisper-s_ablation_6L        (flat ablation)
 # and the medium/large equivalents. Excludes _lora and *big* variants.
 def discover_checkpoints():
-    m = {}
-    for p in glob.glob(str(PROJECT / "outputs" / "**" / "checkpoint_best_wer.pt"),
-                       recursive=True):
-        rel = p.replace("\\", "/")
-        low = rel.lower()
-        # base, canonical-seed only: drop LoRA, *big* variants, and alt-seed runs
-        # (whisper-s_ablation_8L_seed123 etc. — keep the no-suffix seed-42 ckpt)
-        if "_lora" in low or "big" in low or "_seed" in low or "rand_proj" in low:
-            continue
-        lang = next((L for L in ("danish", "dutch", "english") if L in low), None)
-        if lang is None:
-            continue
-        if "largev2" in low or "whisper-l" in low:
-            scale = "largev2"
-        elif "whisper-medium" in low or "whisper-m_" in low:
-            scale = "medium"
-        elif "whisper-small" in low or "whisper-s_" in low:
-            scale = "small"
-        else:
-            continue
-        md = re.search(r"ablation_(\d+)L", rel, re.IGNORECASE)
-        depth = int(md.group(1)) if md else (0 if "baseline" in low else None)
-        if depth is None:
-            continue
-        m.setdefault((lang, scale, depth), rel)            # first hit wins
+    m, rankmap = {}, {}
+    # prefer best-WER checkpoint; fall back to final when best is absent
+    for fname, rank in (("checkpoint_best_wer.pt", 0), ("checkpoint_final.pt", 1)):
+        for p in glob.glob(str(PROJECT / "outputs" / "**" / fname), recursive=True):
+            rel = p.replace("\\", "/")
+            low = rel.lower()
+            # base, canonical-seed only: drop LoRA, *big*, alt-seed, rand_proj
+            if "_lora" in low or "big" in low or "_seed" in low or "rand_proj" in low:
+                continue
+            lang = next((L for L in ("danish", "dutch", "english") if L in low), None)
+            if lang is None:
+                continue
+            if "largev2" in low or "whisper-l" in low:
+                scale = "largev2"
+            elif "whisper-medium" in low or "whisper-m_" in low:
+                scale = "medium"
+            elif "whisper-small" in low or "whisper-s_" in low:
+                scale = "small"
+            else:
+                continue
+            md = re.search(r"ablation_(\d+)L", rel, re.IGNORECASE)
+            depth = int(md.group(1)) if md else (0 if "baseline" in low else None)
+            if depth is None:
+                continue
+            key = (lang, scale, depth)
+            if key not in m or rank < rankmap[key]:
+                m[key], rankmap[key] = rel, rank
     return m
 
 CKPTS = None      # lazily populated on first build_jobs()
