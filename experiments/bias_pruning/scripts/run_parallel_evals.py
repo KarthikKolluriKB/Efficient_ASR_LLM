@@ -213,7 +213,7 @@ def build_jobs():
             if ck is None:
                 skipped.append((jid, "no checkpoint")); continue
             if not cf.exists():
-                skipped.append((jid, f"no config {cfg(scale, lang, d)}")); continue
+                skipped.append((jid, f"no config {cfg(scale, lang, d, cond)}")); continue
             cmd = [
                 sys.executable, EVAL,
                 "--config", cfg(scale, lang, d, cond),
