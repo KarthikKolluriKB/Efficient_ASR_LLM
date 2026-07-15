@@ -103,6 +103,12 @@ CELLS = [
     # --- Small CV22-EN: full range (L-5..L-11 lost to collision; redo all) ---
     dict(corpus="cv22", scale="small", lang="english", step=1,
          demo="cv22_tsv", extra=[]),
+    # --- Medium CV22-EN: full range ---
+    dict(corpus="cv22", scale="medium", lang="english", step=2,
+         demo="cv22_tsv", extra=[]),
+    # --- Large-v2 CV22-EN: full range (uncomment to also redo large) ---
+    # dict(corpus="cv22", scale="largev2", lang="english", step=2,
+    #      demo="cv22_tsv", extra=[]),
     # --- Small Danish: incomplete (missing baseline); redo all ---
     dict(corpus="da", scale="small", lang="danish", step=1,
          demo="cv22_tsv", extra=[]),   # TODO: DA demographic source? (cv metadata)
