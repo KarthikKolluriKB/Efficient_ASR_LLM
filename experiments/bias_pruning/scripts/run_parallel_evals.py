@@ -56,9 +56,15 @@ def depths_for(scale, step):
 # `step` is the prune-depth increment (small was swept in 1-layer steps).
 # ---------------------------------------------------------------------------
 def cfg(scale, lang, depth, cond="base"):
-    stem = "baseline" if depth == 0 else f"ablation_{depth}L"
     sub = "LoRA/eval" if cond == "lora" else "eval"
-    return f"configs/whisper_{scale}/{lang}/{sub}/{stem}.yaml"
+    # baseline config name varies (baseline.yaml vs whisper-s_baseline.yaml);
+    # ablations are consistently ablation_{N}L.yaml. Return first that exists.
+    stems = [f"ablation_{depth}L"] if depth else ["baseline", "whisper-s_baseline"]
+    for stem in stems:
+        rel = f"configs/whisper_{scale}/{lang}/{sub}/{stem}.yaml"
+        if (PROJECT / rel).exists():
+            return rel
+    return f"configs/whisper_{scale}/{lang}/{sub}/{stems[0]}.yaml"   # for the skip msg
 
 # ---- checkpoint DISCOVERY (naming is inconsistent, so scan instead of guess) ----
 # Maps (lang, scale, depth) -> checkpoint path by scanning outputs/. Handles:
