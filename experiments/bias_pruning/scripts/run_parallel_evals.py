@@ -71,7 +71,9 @@ def discover_checkpoints():
                        recursive=True):
         rel = p.replace("\\", "/")
         low = rel.lower()
-        if "_lora" in low or "big" in low:
+        # base, canonical-seed only: drop LoRA, *big* variants, and alt-seed runs
+        # (whisper-s_ablation_8L_seed123 etc. — keep the no-suffix seed-42 ckpt)
+        if "_lora" in low or "big" in low or "_seed" in low or "rand_proj" in low:
             continue
         lang = next((L for L in ("danish", "dutch", "english") if L in low), None)
         if lang is None:
@@ -110,8 +112,11 @@ CELLS = [
     # dict(corpus="cv22", scale="largev2", lang="english", step=2,
     #      demo="cv22_tsv", extra=[]),
     # --- Small Danish: incomplete (missing baseline); redo all ---
+    # demo=hf_columns reads gender/age/accent from the HF dataset rows (cv22_tsv
+    # would wrongly join against the ENGLISH CV22 transcript). VERIFY the Danish
+    # HF dataset actually carries these columns; else a DA-specific tsv is needed.
     dict(corpus="da", scale="small", lang="danish", step=1,
-         demo="cv22_tsv", extra=[]),   # TODO: DA demographic source? (cv metadata)
+         demo="hf_columns", extra=[]),
     # --- Medium L2-ARCTIC: only keep-22 (depth 2) corrupt; redo that depth ---
     dict(corpus="l2arctic", scale="medium", lang="english", step=2, depths=[2],
          demo="hf_columns",
