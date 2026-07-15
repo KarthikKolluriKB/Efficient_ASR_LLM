@@ -25,7 +25,7 @@ USAGE
 !!! BEFORE RUNNING: verify CONFIG/CKPT/DATA paths in CELLS below against the
 server layout. Placeholders are marked TODO. Run --dry-run first.
 """
-import argparse, os, queue, subprocess, threading, time, sys
+import argparse, os, queue, subprocess, threading, time, sys, re, glob
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[3]     # repo root (…/Efficient_ASR_LLM)
@@ -59,9 +59,42 @@ def cfg(scale, lang, depth):
     stem = "baseline" if depth == 0 else f"ablation_{depth}L"
     return f"configs/whisper_{scale}/{lang}/eval/{stem}.yaml"
 
+# ---- checkpoint DISCOVERY (naming is inconsistent, so scan instead of guess) ----
+# Maps (lang, scale, depth) -> checkpoint path by scanning outputs/. Handles:
+#   whisper-s_baseline           (baseline, depth 0)
+#   whisper-small/ablation_2L    (nested ablation)
+#   whisper-s_ablation_6L        (flat ablation)
+# and the medium/large equivalents. Excludes _lora and *big* variants.
+def discover_checkpoints():
+    m = {}
+    for p in glob.glob(str(PROJECT / "outputs" / "**" / "checkpoint_best_wer.pt"),
+                       recursive=True):
+        rel = p.replace("\\", "/")
+        low = rel.lower()
+        if "_lora" in low or "big" in low:
+            continue
+        lang = next((L for L in ("danish", "dutch", "english") if L in low), None)
+        if lang is None:
+            continue
+        if "largev2" in low or "whisper-l" in low:
+            scale = "largev2"
+        elif "whisper-medium" in low or "whisper-m_" in low:
+            scale = "medium"
+        elif "whisper-small" in low or "whisper-s_" in low:
+            scale = "small"
+        else:
+            continue
+        md = re.search(r"ablation_(\d+)L", low)
+        depth = int(md.group(1)) if md else (0 if "baseline" in low else None)
+        if depth is None:
+            continue
+        m.setdefault((lang, scale, depth), rel)            # first hit wins
+    return m
+
+CKPTS = None      # lazily populated on first build_jobs()
+
 def ckpt(scale, lang, depth):
-    stem = "baseline" if depth == 0 else f"ablation_{depth}L"
-    return f"outputs/{lang}/whisper-{scale}/{stem}/checkpoint_best_wer.pt"
+    return CKPTS.get((lang, scale, depth))                 # None if not found
 
 # English-trained system is reused zero-shot for Fair-Speech and L2-ARCTIC:
 # same checkpoint/config as CV22-EN, only the eval dataset + demographic source
@@ -99,7 +132,10 @@ CELLS = [
 ]
 
 def build_jobs():
-    jobs = []
+    global CKPTS
+    if CKPTS is None:
+        CKPTS = discover_checkpoints()
+    jobs, skipped = [], []
     for cell in CELLS:
         scale, lang, corpus, step = cell["scale"], cell["lang"], cell["corpus"], cell["step"]
         depths = cell.get("depths", depths_for(scale, step))
@@ -108,10 +144,16 @@ def build_jobs():
             keep = SCALE_LAYERS[scale] - d
             jid = f"{corpus}_{scale}_d{d:02d}_keep{keep:02d}"
             out = outdir / f"d{d:02d}_keep{keep:02d}_seed{SEED}.csv"
+            ck = ckpt(scale, lang, d)
+            cf = PROJECT / cfg(scale, lang, d)
+            if ck is None:
+                skipped.append((jid, "no checkpoint")); continue
+            if not cf.exists():
+                skipped.append((jid, f"no config {cfg(scale, lang, d)}")); continue
             cmd = [
                 sys.executable, EVAL,
                 "--config", cfg(scale, lang, d),
-                "--checkpoint_path", ckpt(scale, lang, d),
+                "--checkpoint_path", ck,
                 "--prune_depth", str(d), "--seed", str(SEED),
                 "--condition", jid,
                 "--output_path", str(out),
@@ -119,7 +161,11 @@ def build_jobs():
                 "--demographic_source", cell["demo"],
                 "--no_wandb",
             ] + (["--batch_size", str(BATCH_SIZE)] if BATCH_SIZE else []) + cell["extra"]
-            jobs.append(dict(id=jid, out=out, cmd=cmd))
+            jobs.append(dict(id=jid, out=out, cmd=cmd, ckpt=ck))
+    if skipped:
+        print(f"[!] {len(skipped)} job(s) skipped (missing checkpoint/config):")
+        for jid, why in skipped:
+            print(f"    {jid}: {why}")
     return jobs
 
 # ---------------------------------------------------------------------------
@@ -167,7 +213,7 @@ def main():
 
     if args.list:
         for j in jobs:
-            print(f"  {j['id']:34s} -> {j['out'].relative_to(PROJECT)}")
+            print(f"  {j['id']:34s}  ckpt={j['ckpt']}")
         print(f"\n{len(jobs)} jobs, {len(GPUS)} GPUs x {JOBS_PER_GPU} = "
               f"{len(GPUS)*JOBS_PER_GPU} concurrent")
         return
