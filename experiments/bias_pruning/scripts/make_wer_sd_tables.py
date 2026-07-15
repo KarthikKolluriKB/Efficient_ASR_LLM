@@ -39,10 +39,13 @@ SWEEPS = [
     {"name": "largev2_cv22_en", "layers": 32, "corpus": "Common Voice 22 (EN)",
      "axes": CV22_AXES, "expect_n": CV22_N,
      "per_globs": [os.path.join(EXT, "largev2_cv22_sweep", "per_utterance", "*.csv")]},
-    # CV22 small+medium re-evaluated clean -> reeval_results (see run_parallel_evals)
+    # medium CV22 base is complete/correct in all_results (no re-eval needed)
     {"name": "medium_cv22_en", "layers": 24, "corpus": "Common Voice 22 (EN)",
      "axes": CV22_AXES, "expect_n": CV22_N,
-     "per_globs": [r"P:\Programming\Bias in pruning exps\reeval_results\cv22_medium_base\*.csv"]},
+     "per_globs": [os.path.join(EXT, "medium_cv22_sweep", "per_utterance", "*.csv"),
+                   os.path.join(EXT, "medium_cv22_sweep", "per_utt", "*.csv")]},
+    # small CV22 re-evaluated (collision loss) -> reeval_results after the
+    # keep-convention fix in run_parallel_evals; RE-RUN needed (prior run garbage)
     {"name": "small_cv22_en", "layers": 12, "corpus": "Common Voice 22 (EN)",
      "axes": CV22_AXES, "expect_n": CV22_N,
      "per_globs": [r"P:\Programming\Bias in pruning exps\reeval_results\cv22_small_base\*.csv"]},

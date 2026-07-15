@@ -57,9 +57,10 @@ def depths_for(scale, step):
 # ---------------------------------------------------------------------------
 def cfg(scale, lang, depth, cond="base"):
     sub = "LoRA/eval" if cond == "lora" else "eval"
-    # baseline config name varies (baseline.yaml vs whisper-s_baseline.yaml);
-    # ablations are consistently ablation_{N}L.yaml. Return first that exists.
-    stems = [f"ablation_{depth}L"] if depth else ["baseline", "whisper-s_baseline"]
+    # IMPORTANT: configs/checkpoints are named by layers KEPT, not removed
+    # (ablation_2L.yaml = "2 layers kept"; see run_depth_sweep.py:159).
+    keep = SCALE_LAYERS[scale] - depth
+    stems = ["baseline", "whisper-s_baseline"] if depth == 0 else [f"ablation_{keep}L"]
     for stem in stems:
         rel = f"configs/whisper_{scale}/{lang}/{sub}/{stem}.yaml"
         if (PROJECT / rel).exists():
@@ -105,9 +106,15 @@ def discover_checkpoints():
                 scale = "small"
             else:
                 continue
+            # ablation_{N}L encodes layers KEPT (not removed); depth = total - N
             md = re.search(r"ablation_(\d+)L", rel, re.IGNORECASE)
-            depth = int(md.group(1)) if md else (0 if "baseline" in low else None)
-            if depth is None:
+            if md:
+                depth = SCALE_LAYERS[scale] - int(md.group(1))
+            elif "baseline" in low:
+                depth = 0
+            else:
+                continue
+            if depth < 0:
                 continue
             key = (cond, lang, scale, depth)
             if key not in m or rank < rankmap[key]:
