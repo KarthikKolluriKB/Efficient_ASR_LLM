@@ -75,6 +75,32 @@ SWEEPS = [
      "axes": CV22_AXES, "expect_n": 2684,
      "per_globs": [os.path.join(EXT, "small_da_sweep", "per_utt", "*.csv")]},
 ]
+
+# ---- LoRA (RQ2) sweeps: same corpora/scales/axes/counts as base, adapter
+# condition. Paths assume LoRA per-utterance pulled into <sweep>_LORA_sweep/.
+# EN/FS/L2A LoRA live under all_results/; NL/DA LoRA under rq_final/.
+EXT_ROOT = os.path.dirname(EXT)   # parent of all_results (holds rq_final too)
+# (name, layers, axes, expect_n, corpus, relative sweep folder)
+_LORA = [
+    ("largev2_cv22", 32, CV22_AXES, CV22_N, "Common Voice 22 (EN)", "all_results/largev2_cv22_LORA_sweep"),
+    ("medium_cv22",  24, CV22_AXES, CV22_N, "Common Voice 22 (EN)", "all_results/medium_cv22_LORA_sweep"),
+    ("small_cv22",   12, CV22_AXES, CV22_N, "Common Voice 22 (EN)", "all_results/small_cv22_LORA_sweep"),
+    ("largev2_fairspeech", 32, FS_AXES, 26417, "Fair-Speech", "all_results/largev2_fairspeech_LORA_sweep"),
+    ("medium_fairspeech",  24, FS_AXES, 26417, "Fair-Speech", "all_results/medium_fairspeech_LORA_sweep"),
+    ("small_fairspeech",   12, FS_AXES, 26417, "Fair-Speech", "all_results/small_fairspeech_LORA_sweep"),
+    ("largev2_cv_nl", 32, CV22_AXES, 12033, "Common Voice (NL)", "rq_final/largev2_nl_LORA_sweep"),
+    ("medium_cv_nl",  24, CV22_AXES, 12033, "Common Voice (NL)", "rq_final/medium_nl_LORA_sweep"),
+    ("small_cv_nl",   12, CV22_AXES, 12033, "Common Voice (NL)", "rq_final/small_nl_LORA_sweep"),
+    ("largev2_cv_da", 32, CV22_AXES, 2684,  "Common Voice (DA)", "rq_final/largev2_da_LORA_sweep"),
+    ("medium_cv_da",  24, CV22_AXES, 2684,  "Common Voice (DA)", "rq_final/medium_da_LORA_sweep"),
+]
+for _n, _L, _ax, _en, _corp, _folder in _LORA:
+    SWEEPS.append({
+        "name": f"{_n}_lora", "layers": _L, "corpus": f"{_corp} +LoRA",
+        "axes": _ax, "expect_n": _en,
+        "per_globs": [os.path.join(EXT_ROOT, _folder, "per_utterance", "*.csv"),
+                      os.path.join(EXT_ROOT, _folder, "per_utt", "*.csv")],
+    })
 OUT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                         "..", "results", "tables"))
 

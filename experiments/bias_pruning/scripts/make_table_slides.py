@@ -223,6 +223,15 @@ DATASETS = {
         ["largev2_cv_nl", "medium_cv_nl", "small_cv_nl"]),
     "Common Voice (DA)":     ("danish_all_scales",
         ["largev2_cv_da", "medium_cv_da"]),
+    # --- LoRA (RQ2) combined decks, per dataset ---
+    "Common Voice 22 (EN) +LoRA": ("cv22_en_lora_all_scales",
+        ["largev2_cv22_lora", "medium_cv22_lora", "small_cv22_lora"]),
+    "Fair-Speech +LoRA":          ("fairspeech_lora_all_scales",
+        ["largev2_fairspeech_lora", "medium_fairspeech_lora", "small_fairspeech_lora"]),
+    "Common Voice (NL) +LoRA":    ("dutch_lora_all_scales",
+        ["largev2_cv_nl_lora", "medium_cv_nl_lora", "small_cv_nl_lora"]),
+    "Common Voice (DA) +LoRA":    ("danish_lora_all_scales",
+        ["largev2_cv_da_lora", "medium_cv_da_lora"]),
 }
 
 if __name__ == "__main__":
@@ -230,6 +239,8 @@ if __name__ == "__main__":
         for dataset, (base, names) in DATASETS.items():
             files = [os.path.join(TBL_DIR, f"{n}_wer_sd.md") for n in names]
             files = [f for f in files if os.path.exists(f)]
+            if not files:
+                continue      # dataset's per-scale tables not generated yet
             build_combined_md(files, os.path.join(TBL_DIR, f"{base}_wer_sd.md"), dataset)
             build_combined(files, os.path.join(TBL_DIR, f"{base}_slides.pptx"))
         sys.exit(0)
