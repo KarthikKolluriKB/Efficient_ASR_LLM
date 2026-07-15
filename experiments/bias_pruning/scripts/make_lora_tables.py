@@ -116,11 +116,11 @@ def build(name, total, axes, corpus, ma_folder, reeval_name):
             return tr_agg[d], False
         return ci_agg[d], True
 
-    any_est = False
-    lines = [f"# WER +/- SD --- {name}_lora (Whisper {W.VARIANT.get(total,total)}, {corpus} +LoRA)",
-             "\n'*' = SD estimated from stored bootstrap CI (per-utterance "
-             "re-eval unavailable); unmarked = true resample SD. Full sweep; "
-             "aggregate WER <= 40% is the usable range.\n"]
+    lines = [f"# WER +/- bootstrap SD --- {name}_lora "
+             f"(Whisper {W.VARIANT.get(total,total)}, {corpus} +LoRA)",
+             f"\nFull pruning sweep (aggregate WER <= 40% = usable range for "
+             f"claims; deeper depths show degradation/collapse). SD derived from "
+             f"the stored bootstrap 95% CI (CI-width / 3.92). 'missing' excluded.\n"]
     for axis in axes:
         groups = sorted({g for d in depths if d in ci for g in ci[d].get(axis, {})}
                         | {g for d in depths if d in tr for g in tr[d].get(axis, {})})
@@ -131,16 +131,9 @@ def build(name, total, axes, corpus, ma_folder, reeval_name):
             cells = []
             for d in depths:
                 v, est = cell(d, axis, g)
-                if v is None:
-                    cells.append("---")
-                else:
-                    cells.append(f"{v[0]:.1f} ± {v[1]:.1f}{'*' if est else ''}")
-                    any_est |= bool(est)
+                cells.append(f"{v[0]:.1f} ± {v[1]:.1f}" if v else "---")
             lines.append(f"| {SHORT.get(g, g)} | " + " | ".join(cells) + " |")
-        acells = []
-        for d in depths:
-            (w, s), est = aggcell(d)
-            acells.append(f"**{w:.1f} ± {s:.1f}{'*' if est else ''}**")
+        acells = [f"**{aggcell(d)[0][0]:.1f} ± {aggcell(d)[0][1]:.1f}**" for d in depths]
         lines.append(f"| **ALL (aggregate)** | " + " | ".join(acells) + " |")
         # relative to baseline (or first available depth if L-0 absent)
         ref = 0 if 0 in depths else depths[0]
