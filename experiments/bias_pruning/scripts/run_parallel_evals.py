@@ -166,6 +166,13 @@ CELLS = [
          demo="hf_columns", extra=[]),
     dict(corpus="da", scale="medium", lang="danish", step=2, cond="lora",
          demo="hf_columns", extra=[]),
+    # --- L2-ARCTIC +LoRA (L1 axis; illustrative) ---
+    dict(corpus="l2arctic", scale="largev2", lang="english", step=2, cond="lora",
+         demo="hf_columns", extra=["--hf_dataset_path", "data/l2arctic_hf"]),
+    dict(corpus="l2arctic", scale="medium", lang="english", step=2, cond="lora",
+         demo="hf_columns", extra=["--hf_dataset_path", "data/l2arctic_hf"]),
+    dict(corpus="l2arctic", scale="small", lang="english", step=1, cond="lora",
+         demo="hf_columns", extra=["--hf_dataset_path", "data/l2arctic_hf"]),
     # ---- OPTIONAL: uncomment to re-evaluate ALL non-LoRA base cells into clean
     #      corpus-tagged folders (guarantees no contamination). Large batch. ----
     # dict(corpus="cv22", scale="largev2", lang="english", step=2, demo="cv22_tsv", extra=[]),
