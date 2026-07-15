@@ -1,0 +1,84 @@
+% Methodology section --- fairness workshop paper (IMPACT-SPEECH)
+% RQ1 (does pruning widen demographic gaps, across scale and language?) +
+% RQ2 (does LoRA repair them?). All facts verified against main.tex / code.
+
+\section{Methodology}
+\label{sec:method}
+
+\subsection{System Under Study}
+We study a SLAM-ASR system \citep{ma2024embarrassingly}: a frozen Whisper
+encoder \citep{radford2023robust} feeds a small trainable projector, whose
+output conditions a frozen Qwen2.5-3B language model \citep{qwen2025qwen25technicalreport}
+that decodes text. The projector is a two-layer MLP that concatenates five
+consecutive encoder frames (a $5{\times}$ temporal downsample) before two linear
+layers with ReLU, dropout $0.1$, and a final LayerNorm matching the LLM
+embedding scale. In the base condition the projector is the only trained
+component. This modular design is what makes the study possible: we can prune
+the encoder and retrain only the projector, isolating the effect of pruning on
+the deployed system rather than measuring a post-hoc ablation.
+
+\subsection{Pruning and Adaptation}
+We prune the encoder by structured top-down depth reduction: from the full
+$N$-layer encoder we remove the top $k$ layers and keep the bottom $N{-}k$,
+motivated by the finding that upper encoder layers carry increasingly abstract
+linguistic information \citep{pasad2021layer} that the LLM can partly supply.
+We sweep $k$ in steps of two layers, from the unpruned model to collapse, for
+Whisper small (12 layers), medium (24), and large-v2 (32). \emph{For every
+pruning depth the projector is retrained from scratch}, so each depth is an
+independently trained, deployable recognizer. Crucially, each projector's
+checkpoint is selected by \emph{aggregate} development WER---exactly the
+mean-based selection criterion standard practice uses---which is what allows a
+prune to look ``safe'' on average while harming a subgroup.
+
+For RQ2 we add Low-Rank Adaptation \citep{hu2022lora} to the query, key, value,
+and output projections of every LLM attention layer, trained on top of each
+pruned encoder at matched depths ($r{=}16, \alpha{=}32$ for the
+medium/high-resource languages; $r{=}8, \alpha{=}16$ for the low-resource
+language to avoid overfitting). This tests whether the field's default repair
+for compression damage distributes its gains evenly across subgroups.
+
+\subsection{Training}
+All models use AdamW \citep{loshchilov2017decoupled} (learning rate
+$1{\times}10^{-4}$, weight decay $0.01$, gradient clipping $1.0$), a cosine
+schedule with $5\%$ warmup, and bfloat16 on a single NVIDIA A6000. The encoder
+and LLM base weights stay frozen throughout; only the projector (and LoRA
+adapters, when enabled) are updated. We train with a single seed; significance
+is therefore established by a paired bootstrap over the shared evaluation set
+(below) rather than by variation across seeds.
+
+\subsection{Evaluation Corpora}
+The system is trained on Common Voice~22 \citep{ardila2020common} for each
+target language and evaluated on held-out, speaker-disjoint test splits. Our
+headline demographic corpus is \textbf{Fair-Speech} \citep{[FAIRSPEECH_CITE]},
+used entirely \emph{zero-shot}---no component ever sees it in training and no
+demographic label is ever available to any training stage, so results measure
+transfer to unseen speakers. Fair-Speech provides the richest demographic
+schema (ethnicity, socio-economic status, gender, age; 26{,}417 utterances) and
+carries the race and SES findings. We add cross-lingual evaluation on Common
+Voice Dutch and Danish---spanning an order-of-magnitude difference in training
+data---to test whether the effect depends on the model remaining a usable
+recognizer.
+
+\subsection{Measuring Disparity}
+We measure fairness with per-subgroup WER, computed with
+\texttt{jiwer}\footnote{\url{https://github.com/jitsi/jiwer}} after lowercasing
+and removing punctuation from predictions and references (language-specific
+letters such as Danish \ae, \o, \aa{} are preserved, as the normalizer strips
+only punctuation); decoding uses beam search with beam size~2. We report
+disparity two ways, because the two disagree under heavy pruning: an absolute
+gap $\Delta = \text{WER}_{\text{worst}} - \text{WER}_{\text{best}}$ and a
+relative gap $\rho = \text{WER}_{\text{worst}} / \text{WER}_{\text{best}}$. We
+lead with $\rho$ for comparisons across model scale and pruning depth, since it
+cancels the overall degradation that inflates $\Delta$ once every group worsens.
+
+Each subgroup WER carries a $95\%$ confidence interval from a $1{,}000$-resample
+utterance-level bootstrap, and changes between two conditions (e.g., before and
+after a prune) are tested with a paired bootstrap over the same utterance set.
+We restrict all claims to the \emph{usable range}, where aggregate WER stays at
+or below roughly $40\%$ and the system remains a working recognizer, and to
+subgroup cells meeting an analysability threshold of at least $200$ utterances
+\emph{and} $30$ minutes of audio; smaller cells are marked unanalysable and
+excluded. For the headline contrast we fix the two groups in advance---Black
+(highest WER) versus Asian (lowest WER)---rather than re-selecting a reference
+group at each depth; Black versus White shows the same widening, which we report
+as a robustness check.
