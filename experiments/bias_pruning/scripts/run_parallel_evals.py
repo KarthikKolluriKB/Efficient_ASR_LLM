@@ -67,8 +67,10 @@ def cfg(scale, lang, depth):
 # and the medium/large equivalents. Excludes _lora and *big* variants.
 def discover_checkpoints():
     m, rankmap = {}, {}
-    # prefer best-WER checkpoint; fall back to final when best is absent
-    for fname, rank in (("checkpoint_best_wer.pt", 0), ("checkpoint_final.pt", 1)):
+    # checkpoint filenames vary across runs (checkpoint_* vs projector_*); prefer
+    # best-WER over final. Same rank -> first glob hit wins.
+    for fname, rank in (("checkpoint_best_wer.pt", 0), ("projector_best_wer.pt", 0),
+                        ("checkpoint_final.pt", 1), ("projector_final.pt", 1)):
         for p in glob.glob(str(PROJECT / "outputs" / "**" / fname), recursive=True):
             rel = p.replace("\\", "/")
             low = rel.lower()
