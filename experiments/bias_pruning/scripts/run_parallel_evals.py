@@ -55,9 +55,10 @@ def depths_for(scale, step):
 # `extra` holds dataset-specific flags (hf dataset path, demographic source).
 # `step` is the prune-depth increment (small was swept in 1-layer steps).
 # ---------------------------------------------------------------------------
-def cfg(scale, lang, depth):
+def cfg(scale, lang, depth, cond="base"):
     stem = "baseline" if depth == 0 else f"ablation_{depth}L"
-    return f"configs/whisper_{scale}/{lang}/eval/{stem}.yaml"
+    sub = "LoRA/eval" if cond == "lora" else "eval"
+    return f"configs/whisper_{scale}/{lang}/{sub}/{stem}.yaml"
 
 # ---- checkpoint DISCOVERY (naming is inconsistent, so scan instead of guess) ----
 # Maps (lang, scale, depth) -> checkpoint path by scanning outputs/. Handles:
@@ -66,17 +67,27 @@ def cfg(scale, lang, depth):
 #   whisper-s_ablation_6L        (flat ablation)
 # and the medium/large equivalents. Excludes _lora and *big* variants.
 def discover_checkpoints():
+    """Map (cond, lang, scale, depth) -> checkpoint path. cond in {base, lora}.
+    LoRA folders end in '_lora'/'_lora_final' (canonical only — sub-variants like
+    _lora_me/_mid/_qv are skipped). Base excludes any _lora/_seed/big/rand_proj."""
     m, rankmap = {}, {}
-    # checkpoint filenames vary across runs (checkpoint_* vs projector_*); prefer
-    # best-WER over final. Same rank -> first glob hit wins.
     for fname, rank in (("checkpoint_best_wer.pt", 0), ("projector_best_wer.pt", 0),
                         ("checkpoint_final.pt", 1), ("projector_final.pt", 1)):
         for p in glob.glob(str(PROJECT / "outputs" / "**" / fname), recursive=True):
             rel = p.replace("\\", "/")
             low = rel.lower()
-            # base, canonical-seed only: drop LoRA, *big*, alt-seed, rand_proj
-            if "_lora" in low or "big" in low or "_seed" in low or "rand_proj" in low:
+            if "big" in low or "_seed" in low or "rand_proj" in low:
                 continue
+            parent = os.path.basename(os.path.dirname(rel)).lower()   # ckpt folder
+            if "_lora" in parent:
+                cond = "lora"
+                base = parent[:-6] if parent.endswith("_final") else parent
+                if not base.endswith("_lora"):        # sub-variant -> skip
+                    continue
+            elif "_lora" in low:                       # lora token elsewhere in path
+                continue
+            else:
+                cond = "base"
             lang = next((L for L in ("danish", "dutch", "english") if L in low), None)
             if lang is None:
                 continue
@@ -92,15 +103,15 @@ def discover_checkpoints():
             depth = int(md.group(1)) if md else (0 if "baseline" in low else None)
             if depth is None:
                 continue
-            key = (lang, scale, depth)
+            key = (cond, lang, scale, depth)
             if key not in m or rank < rankmap[key]:
                 m[key], rankmap[key] = rel, rank
     return m
 
 CKPTS = None      # lazily populated on first build_jobs()
 
-def ckpt(scale, lang, depth):
-    return CKPTS.get((lang, scale, depth))                 # None if not found
+def ckpt(scale, lang, depth, cond="base"):
+    return CKPTS.get((cond, lang, scale, depth))           # None if not found
 
 # English-trained system is reused zero-shot for Fair-Speech and L2-ARCTIC:
 # same checkpoint/config as CV22-EN, only the eval dataset + demographic source
@@ -125,6 +136,36 @@ CELLS = [
     dict(corpus="l2arctic", scale="medium", lang="english", step=2, depths=[2],
          demo="hf_columns",
          extra=["--hf_dataset_path", "data/l2arctic_hf"]),
+
+    # ===================== LoRA (RQ2) — per-utterance never saved =============
+    # English LoRA system (trained on CV22-EN) is reused zero-shot for
+    # Fair-Speech / L2-ARCTIC; only the eval dataset + demo source change.
+    # --- CV22-EN +LoRA ---
+    dict(corpus="cv22", scale="largev2", lang="english", step=2, cond="lora",
+         demo="cv22_tsv", extra=[]),
+    dict(corpus="cv22", scale="medium", lang="english", step=2, cond="lora",
+         demo="cv22_tsv", extra=[]),
+    dict(corpus="cv22", scale="small", lang="english", step=1, cond="lora",
+         demo="cv22_tsv", extra=[]),
+    # --- Fair-Speech +LoRA (headline RQ2) ---
+    dict(corpus="fairspeech", scale="largev2", lang="english", step=2, cond="lora",
+         demo="hf_columns", extra=["--hf_dataset_path", "data/fairspeech_hf"]),
+    dict(corpus="fairspeech", scale="medium", lang="english", step=2, cond="lora",
+         demo="hf_columns", extra=["--hf_dataset_path", "data/fairspeech_hf"]),
+    dict(corpus="fairspeech", scale="small", lang="english", step=1, cond="lora",
+         demo="hf_columns", extra=["--hf_dataset_path", "data/fairspeech_hf"]),
+    # --- Dutch +LoRA ---
+    dict(corpus="nl", scale="largev2", lang="dutch", step=2, cond="lora",
+         demo="hf_columns", extra=[]),
+    dict(corpus="nl", scale="medium", lang="dutch", step=2, cond="lora",
+         demo="hf_columns", extra=[]),
+    dict(corpus="nl", scale="small", lang="dutch", step=1, cond="lora",
+         demo="hf_columns", extra=[]),
+    # --- Danish +LoRA ---
+    dict(corpus="da", scale="largev2", lang="danish", step=2, cond="lora",
+         demo="hf_columns", extra=[]),
+    dict(corpus="da", scale="medium", lang="danish", step=2, cond="lora",
+         demo="hf_columns", extra=[]),
     # ---- OPTIONAL: uncomment to re-evaluate ALL non-LoRA base cells into clean
     #      corpus-tagged folders (guarantees no contamination). Large batch. ----
     # dict(corpus="cv22", scale="largev2", lang="english", step=2, demo="cv22_tsv", extra=[]),
@@ -153,21 +194,22 @@ def build_jobs():
     jobs, skipped = [], []
     for cell in CELLS:
         scale, lang, corpus, step = cell["scale"], cell["lang"], cell["corpus"], cell["step"]
+        cond = cell.get("cond", "base")
         depths = cell.get("depths", depths_for(scale, step))
-        outdir = OUT_ROOT / f"{corpus}_{scale}_{CONDITION}"   # isolated per cell
+        outdir = OUT_ROOT / f"{corpus}_{scale}_{cond}"       # isolated per cell
         for d in depths:
             keep = SCALE_LAYERS[scale] - d
-            jid = f"{corpus}_{scale}_d{d:02d}_keep{keep:02d}"
+            jid = f"{corpus}_{scale}_{cond}_d{d:02d}_keep{keep:02d}"
             out = outdir / f"d{d:02d}_keep{keep:02d}_seed{SEED}.csv"
-            ck = ckpt(scale, lang, d)
-            cf = PROJECT / cfg(scale, lang, d)
+            ck = ckpt(scale, lang, d, cond)
+            cf = PROJECT / cfg(scale, lang, d, cond)
             if ck is None:
                 skipped.append((jid, "no checkpoint")); continue
             if not cf.exists():
                 skipped.append((jid, f"no config {cfg(scale, lang, d)}")); continue
             cmd = [
                 sys.executable, EVAL,
-                "--config", cfg(scale, lang, d),
+                "--config", cfg(scale, lang, d, cond),
                 "--checkpoint_path", ck,
                 "--prune_depth", str(d), "--seed", str(SEED),
                 "--condition", jid,
