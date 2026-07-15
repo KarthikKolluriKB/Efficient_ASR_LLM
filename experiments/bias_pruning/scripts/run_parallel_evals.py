@@ -84,7 +84,7 @@ def discover_checkpoints():
             scale = "small"
         else:
             continue
-        md = re.search(r"ablation_(\d+)L", low)
+        md = re.search(r"ablation_(\d+)L", rel, re.IGNORECASE)
         depth = int(md.group(1)) if md else (0 if "baseline" in low else None)
         if depth is None:
             continue
