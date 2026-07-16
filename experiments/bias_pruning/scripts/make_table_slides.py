@@ -81,18 +81,22 @@ def parse(md):
 
 ROW_H = Inches(0.28)     # explicit row height so 8-group tables fit two per slide
 
-def fit_params(ndepth):
-    """(font_pt, group_col_in) adapted to the number of depth columns so wide
-    full-sweep tables (up to ~16 depths) still fit one slide."""
-    if ndepth <= 8:
-        return 10.5, 2.0
-    if ndepth <= 11:
-        return 9.0, 1.7
-    if ndepth <= 14:
-        return 8.0, 1.5
-    return 7.0, 1.35
+CELL_PT = 10.0          # fixed table cell font size (requested)
 
-def set_cell(cell, text, *, fill=None, color=INK, bold=False, align=PP_ALIGN.CENTER, size=10.5):
+def fit_params(ndepth):
+    """(font_pt, group_col_in). Cell font is pinned at CELL_PT; only the group
+    column narrows as depth columns grow. NOTE: the font no longer shrinks to
+    fit, so a 16-depth sweep at 10 pt can overflow the slide width -- PowerPoint
+    will wrap cells and grow row height rather than scale down."""
+    if ndepth <= 8:
+        return CELL_PT, 2.0
+    if ndepth <= 11:
+        return CELL_PT, 1.7
+    if ndepth <= 14:
+        return CELL_PT, 1.5
+    return CELL_PT, 1.35
+
+def set_cell(cell, text, *, fill=None, color=INK, bold=False, align=PP_ALIGN.CENTER, size=CELL_PT):
     cell.margin_left = Inches(0.03); cell.margin_right = Inches(0.03)
     cell.margin_top = Inches(0.01); cell.margin_bottom = Inches(0.01)
     cell.vertical_anchor = MSO_ANCHOR.MIDDLE
@@ -155,6 +159,18 @@ def add_axis_slide(prs, variant, corpus, axis, tables, margin, width):
 AXIS_SEQ = ["ETHNICITY", "SES", "ACCENT", "L1", "GENDER", "AGE"]
 SCALE_RANK = {"large-v2": 0, "medium": 1, "small": 2}
 
+def save_deck(prs, out):
+    """Write the deck, but do not let ONE file open in PowerPoint abort the whole
+    run: a locked target raises PermissionError, which previously killed the loop
+    and silently left every later dataset stale."""
+    try:
+        prs.save(out)
+        return True
+    except PermissionError:
+        print(f"[LOCKED] {os.path.basename(out)} is open in PowerPoint -- "
+              f"SKIPPED (close it and re-run to refresh this one)")
+        return False
+
 def build(md_path):
     """One deck per table file (slides in the file's own axis order)."""
     variant, corpus, order, axes = parse(open(md_path, encoding="utf-8").read())
@@ -166,8 +182,8 @@ def build(md_path):
         if "absolute" in a and "relative" in a:
             add_axis_slide(prs, variant, corpus, axis, a, margin, width)
     out = md_path.replace("_wer_sd.md", "_slides.pptx")
-    prs.save(out)
-    print(f"wrote {os.path.basename(out)}  ({len(prs.slides._sldIdLst)} slides)")
+    if save_deck(prs, out):
+        print(f"wrote {os.path.basename(out)}  ({len(prs.slides._sldIdLst)} slides)")
 
 def build_combined_md(md_paths, out_md, dataset):
     """One markdown file per dataset: all scales, grouped by axis then scale
@@ -236,7 +252,7 @@ def build_combined(md_paths, out_path):
             if match and "absolute" in match and "relative" in match:
                 add_axis_slide(prs, variant, corp, axis, match, margin, width)
                 n += 1
-    prs.save(out_path)
+    save_deck(prs, out_path)
     print(f"wrote {os.path.basename(out_path)}  ({n} slides, grouped by axis)")
 
 # dataset -> (output basename, per-scale md files large->small)
