@@ -236,7 +236,12 @@ DATASETS = {
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--datasets":
+        # optional filter: --datasets [all|base|lora]  (default all)
+        only = sys.argv[2].lower() if len(sys.argv) > 2 else "all"
         for dataset, (base, names) in DATASETS.items():
+            is_lora = "+LoRA" in dataset
+            if (only == "base" and is_lora) or (only == "lora" and not is_lora):
+                continue
             files = [os.path.join(TBL_DIR, f"{n}_wer_sd.md") for n in names]
             files = [f for f in files if os.path.exists(f)]
             if not files:
