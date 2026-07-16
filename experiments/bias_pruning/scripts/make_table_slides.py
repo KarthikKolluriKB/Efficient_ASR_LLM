@@ -33,6 +33,19 @@ AGG = RGBColor(0xE3, 0xE3, 0xE3)
 FONT = "Calibri"
 AXIS_TITLE = {"SES": "SES", "L1": "L1"}   # keep acronyms; others Title-cased
 
+def sd_source(md):
+    """How the source table says its SD was obtained. Read from the table's own
+    footnote -- never assumed -- so a combined file cannot claim a computation
+    that was not run for those cells."""
+    if "CI-width" in md:
+        return "derived from the stored bootstrap 95% CI (CI-width / 3.92)"
+    m = re.search(r"std of corpus WER over (\d+) utterance-level bootstrap", md)
+    if m:
+        return (f"std of corpus WER over {m.group(1)} utterance-level bootstrap "
+                f"resamples")
+    return "source not stated in the per-scale table"
+
+
 def parse(md):
     """Return (header_variant, header_corpus, ordered axes,
     {axis: {'absolute': (cols, rows), 'relative': (cols, rows)}})."""
@@ -161,19 +174,32 @@ def build_combined_md(md_paths, out_md, dataset):
     (scale order large-v2 -> medium -> small)."""
     parsed = []
     for p in md_paths:
-        v, c, _o, axes = parse(open(p, encoding="utf-8").read())
-        parsed.append((v, c, axes))
+        text = open(p, encoding="utf-8").read()
+        v, c, _o, axes = parse(text)
+        parsed.append((v, c, axes, sd_source(text)))
     corpus = parsed[0][1]
-    all_axes = {ax.upper() for _, _, axes in parsed for ax in axes}
+    all_axes = {ax.upper() for _, _, axes, _ in parsed for ax in axes}
     axis_order = [a for a in AXIS_SEQ if a in all_axes]
-    out = [f"# WER ± bootstrap SD — {dataset} (all Whisper scales)",
+
+    # Never assert one SD method across scales: a dataset can mix true-resample
+    # SD (per-utterance available) with CI-derived SD. Report what each source
+    # table actually says.
+    srcs = {v: s for v, _, _, s in parsed}
+    if len(set(srcs.values())) == 1:
+        sd_line = f"SD: {next(iter(srcs.values()))}."
+    else:
+        per = "; ".join(f"{v} — {srcs[v]}" for v in
+                        sorted(srcs, key=lambda x: SCALE_RANK.get(x, 9)))
+        sd_line = f"SD source varies by scale — {per}."
+
+    out = [f"# WER ± SD — {dataset} (all Whisper scales)",
            f"\nCorpus: {corpus}. Full pruning sweep shown per scale (aggregate WER "
            f"≤ 40% = usable range for claims; deeper depths show degradation/"
-           f"collapse). SD = std of corpus WER over 1000 utterance-level bootstrap "
-           f"resamples.\n"]
+           f"collapse). {sd_line}\n"]
     for axis in axis_order:
         out.append(f"\n# {axis}")
-        for variant, corp, axes in sorted(parsed, key=lambda t: SCALE_RANK.get(t[0], 9)):
+        for variant, corp, axes, _sd in sorted(parsed,
+                                               key=lambda t: SCALE_RANK.get(t[0], 9)):
             match = next((axes[a] for a in axes if a.upper() == axis), None)
             if not match or "absolute" not in match or "relative" not in match:
                 continue
