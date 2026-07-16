@@ -91,19 +91,25 @@ def _normalise_sentence(s: str) -> str:
     return s
 
 
-def load_cv_demographics(tsv_path: Path | None) -> dict[tuple[str, str], dict]:
-    """Load CV22 en/test.tsv into a (client_id_prefix, normalised_sentence) -> demographics map.
+def load_cv_demographics(tsv_path: Path | None,
+                         language: str = "en") -> dict[tuple[str, str], dict]:
+    """Load the CV22 <language>/test.tsv into a (client_id_prefix, normalised_sentence)
+    -> demographics map.
 
     Used only when --demographic_source=cv22_tsv. The CV22 preprocessed HF
     dataset drops demographic columns, so we have to join back to the
     upstream TSV. The prefix is the first 16 chars of `client_id` because
     the preprocessing pipeline truncates it to that length.
+
+    The TSV must match the EVAL language (da/nl/en): joining Danish audio
+    against the English transcript matches nothing. If tsv_path is omitted the
+    correct per-language transcript is downloaded from the upstream dataset.
     """
     if tsv_path is None:
         from huggingface_hub import hf_hub_download
         tsv_path = Path(hf_hub_download(
             repo_id="fsicoli/common_voice_22_0",
-            filename="transcript/en/test.tsv",
+            filename=f"transcript/{language}/test.tsv",
             repo_type="dataset",
         ))
     out: dict[tuple[str, str], dict] = {}
@@ -707,8 +713,9 @@ def main():
         print(f"[Eval] Inference produced {len(rows)} rows.")
 
         if args.demographic_source == "cv22_tsv":
-            print("[Eval] Loading CV22 demographics from upstream test.tsv ...")
-            demo_map = load_cv_demographics(args.cv_test_tsv)
+            print(f"[Eval] Loading CV22 demographics from upstream "
+                  f"{args.language}/test.tsv ...")
+            demo_map = load_cv_demographics(args.cv_test_tsv, args.language)
             rows, n_unmatched = join_demographics(rows, demo_map)
             if n_unmatched:
                 print(f"[Eval] WARNING: {n_unmatched} of {len(rows)} utterances did not match a "

@@ -142,11 +142,11 @@ CELLS = [
     # --- Small Danish: incomplete (missing baseline); redo all ---
     # The Danish HF dataset does NOT carry gender/age/accent (hf_columns yields
     # 'missing' for every row — that is why the earlier small-DA run had no
-    # demographics). Join from the DANISH transcript tsv instead: cv22_tsv is the
-    # right source, but --cv_test_tsv MUST be passed explicitly or it defaults to
-    # downloading the ENGLISH test.tsv. Same pattern as run_da_nl_lora_evals.py.
+    # demographics). Join from the DANISH transcript tsv instead. No explicit
+    # --cv_test_tsv: evaluate_subgroup_wer downloads transcript/{--language}/
+    # test.tsv, i.e. the Danish one, since this cell passes --language da.
     dict(corpus="da", scale="small", lang="danish", step=1,
-         demo="cv22_tsv", extra=["--cv_test_tsv", "data/cv22_hf/da/test.tsv"]),
+         demo="cv22_tsv", extra=[]),
     # --- Medium L2-ARCTIC: only keep-22 (depth 2) corrupt; redo that depth ---
     dict(corpus="l2arctic", scale="medium", lang="english", step=2, depths=[2],
          demo="hf_columns",
