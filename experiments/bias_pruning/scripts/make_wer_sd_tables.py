@@ -17,7 +17,7 @@ only: depths where aggregate WER <= 40%.
 Currently configured for: Whisper large-v2, English, Common Voice 22.
 Outputs Markdown to results/tables/<sweep>_wer_sd.md and prints to stdout.
 """
-import csv, glob, re, os, collections
+import csv, sys, glob, re, os, collections
 import numpy as np
 import jiwer
 
@@ -110,6 +110,8 @@ OUT_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__
 N_BOOT = 1000
 BOOT_SEED = 42
 MIN_UTTS = 200
+MIN_SHOW_UTTS = 30      # --all-groups: below this the bootstrap SD is meaningless
+SHOW_ALL_GROUPS = "--all-groups" in sys.argv
 MIN_SECONDS = 30 * 60
 USABLE_AGG_MAX = 40.0        # aggregate WER (%) at/below = "usable range" (for claims)
 MAX_VALID_WER = 150.0        # above this = corrupt export (e.g. keep-22 ~600%), excluded;
@@ -186,6 +188,8 @@ def run_sweep(sweep):
 
     # results[axis][group][removed] = (wer, sd)
     results = collections.defaultdict(lambda: collections.defaultdict(dict))
+    meta = collections.defaultdict(dict)          # axis -> group -> (n, mins, passes)
+    dropped = collections.defaultdict(set)        # axis -> groups too small to show
     agg_wer = {}     # removed -> aggregate WER (for usable-range gating)
     agg_sd = {}      # removed -> aggregate bootstrap SD
 
@@ -218,11 +222,23 @@ def run_sweep(sweep):
                     continue
                 buckets[k].append(r)
             for grp, items in buckets.items():
-                if len(items) < MIN_UTTS or sum(x["_dur"] for x in items) < MIN_SECONDS:
-                    continue
+                n_ut = len(items)
+                secs = sum(x["_dur"] for x in items)
+                passes = n_ut >= MIN_UTTS and secs >= MIN_SECONDS
+                if not passes:
+                    if not SHOW_ALL_GROUPS:
+                        continue
+                    # Below MIN_SHOW_UTTS the bootstrap is not meaningful: at
+                    # n=1 every resample draws the same utterance, so SD = 0.0
+                    # and the cell would read as perfectly precise. Drop those
+                    # rather than print a falsely confident number.
+                    if n_ut < MIN_SHOW_UTTS:
+                        dropped[axis].add(grp)
+                        continue
                 point, sd = bootstrap_wer_sd([x["_e"] for x in items],
                                              [x["_n"] for x in items], rng)
                 results[axis][grp][removed] = (point, sd)
+                meta[axis][grp] = (n_ut, secs / 60.0, passes)
 
     # show ALL real depths (corrupt exports > MAX_VALID_WER excluded)
     usable = sorted(d for d, w in agg_wer.items() if w <= MAX_VALID_WER)
@@ -258,6 +274,25 @@ def run_sweep(sweep):
              f"utterance-level bootstrap resamples. Subgroups need >= {MIN_UTTS} "
              f"utts AND >= {MIN_SECONDS // 60} min; 'missing' excluded.\n"]
 
+    if SHOW_ALL_GROUPS:
+        n_drop = sum(len(v) for v in dropped.values())
+        lines.append(
+            f"ALL GROUPS SHOWN. Each row gives (n utts, minutes of audio). "
+            f"Rows marked † are BELOW the analysability bar (>= {MIN_UTTS} utts "
+            f"AND >= {MIN_SECONDS // 60} min): they are reported for coverage "
+            f"only and are too imprecise to support a claim — read their SD "
+            f"before using them."
+            + (f" {n_drop} group(s) with < {MIN_SHOW_UTTS} utts are omitted "
+               f"entirely: at that size the bootstrap SD collapses toward 0 and "
+               f"would look falsely precise." if n_drop else "") + "\n")
+
+    def label(axis, g):
+        base = SHORT.get(g, g)
+        if not SHOW_ALL_GROUPS or g not in meta[axis]:
+            return base
+        n_ut, mins, passes = meta[axis][g]
+        return f"{base} (n={n_ut}, {mins:.0f} min){'' if passes else ' †'}"
+
     for axis in axes:
         groups = sorted(results[axis])
         header = "| group | " + " | ".join(f"L-{d}" for d in usable) + " |"
@@ -269,7 +304,7 @@ def run_sweep(sweep):
             cells = " | ".join(
                 f"{results[axis][g][d][0]:.1f} ± {results[axis][g][d][1]:.1f}"
                 if d in results[axis][g] else "---" for d in usable)
-            lines.append(f"| {SHORT.get(g, g)} | {cells} |")
+            lines.append(f"| {label(axis, g)} | {cells} |")
         agg_cells = " | ".join(f"**{agg_wer[d]:.1f} ± {agg_sd[d]:.1f}**" for d in usable)
         lines.append(f"| **ALL (aggregate)** | {agg_cells} |")
 
@@ -280,7 +315,7 @@ def run_sweep(sweep):
             cells = " | ".join(
                 f"{results[axis][g][d][0] / base:.2f}"
                 if (d in results[axis][g] and base) else "---" for d in usable)
-            lines.append(f"| {SHORT.get(g, g)} | {cells} |")
+            lines.append(f"| {label(axis, g)} | {cells} |")
         agg_base = agg_wer[0]
         agg_cells = " | ".join(f"**{agg_wer[d] / agg_base:.2f}**" for d in usable)
         lines.append(f"| **ALL (aggregate)** | {agg_cells} |")
@@ -294,7 +329,9 @@ if __name__ == "__main__":
     import sys
     os.makedirs(OUT_DIR, exist_ok=True)
     # optional substring filters: `python make_wer_sd_tables.py cv_nl cv_da`
-    filters = sys.argv[1:]
+    # flags (--all-groups) are NOT filters: treating them as one silently
+    # matched no sweep and made the whole run a no-op that still exited 0.
+    filters = [a for a in sys.argv[1:] if not a.startswith("--")]
     for sweep in SWEEPS:
         if filters and not any(f in sweep["name"] for f in filters):
             continue
