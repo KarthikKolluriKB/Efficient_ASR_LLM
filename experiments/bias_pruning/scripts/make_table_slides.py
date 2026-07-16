@@ -222,7 +222,7 @@ DATASETS = {
     "Common Voice (NL)":     ("dutch_all_scales",
         ["largev2_cv_nl", "medium_cv_nl", "small_cv_nl"]),
     "Common Voice (DA)":     ("danish_all_scales",
-        ["largev2_cv_da", "medium_cv_da"]),
+        ["largev2_cv_da", "medium_cv_da", "small_cv_da"]),
     # --- LoRA (RQ2) combined decks, per dataset ---
     "Common Voice 22 (EN) +LoRA": ("cv22_en_lora_all_scales",
         ["largev2_cv22_lora", "medium_cv22_lora", "small_cv22_lora"]),

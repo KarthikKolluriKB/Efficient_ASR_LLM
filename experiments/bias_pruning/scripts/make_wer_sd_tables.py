@@ -230,13 +230,30 @@ def run_sweep(sweep):
         print(f"[skip] {name}: no per-utterance files found "
               f"(pattern {per_globs}); nothing to write.")
         return
-    usable_last = max((d for d in usable if agg_wer[d] <= USABLE_AGG_MAX), default=usable[0])
+    # Usable range = the CONTIGUOUS run from the baseline whose aggregate WER
+    # stays under the bar. Not max(qualifying): a sweep can dip back under the
+    # bar after a diverged checkpoint (e.g. Danish large-v2 L-2 = 115.6, L-4 =
+    # 39.9), and "up to L-4" would silently claim the broken depth is usable.
+    run = []
+    for d in usable:
+        if agg_wer[d] > USABLE_AGG_MAX:
+            break
+        run.append(d)
+    usable_last = run[-1] if run else None
+
+    if usable_last is None:
+        usable_txt = (f"NO depth clears the usable bar (aggregate WER <= "
+                      f"{USABLE_AGG_MAX:.0f}%): the baseline itself is "
+                      f"{agg_wer[usable[0]]:.1f}%, so this sweep cannot support "
+                      f"subgroup claims")
+    else:
+        usable_txt = (f"Usable range for claims = aggregate WER <= "
+                      f"{USABLE_AGG_MAX:.0f}% (L-{usable[0]} .. L-{usable_last})")
 
     lines = [f"# WER +/- bootstrap SD --- {name} "
              f"(Whisper {VARIANT.get(total, total)}, {corpus})",
              f"\nFull pruning sweep L-{usable[0]} ... L-{usable[-1]} "
-             f"(all depths shown). Usable range for claims = aggregate WER "
-             f"<= {USABLE_AGG_MAX:.0f}% (up to L-{usable_last}); deeper depths "
+             f"(all depths shown). {usable_txt}; deeper depths "
              f"show degradation/collapse. SD = std of corpus WER over {N_BOOT} "
              f"utterance-level bootstrap resamples. Subgroups need >= {MIN_UTTS} "
              f"utts AND >= {MIN_SECONDS // 60} min; 'missing' excluded.\n"]
